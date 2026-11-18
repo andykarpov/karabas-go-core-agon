@@ -9,6 +9,7 @@
 #include <deque>
 #include <vector>
 #include <string>
+#include <cstdlib>
 
 struct SdCard {
 	FILE *img = nullptr;
@@ -30,6 +31,7 @@ struct SdCard {
 	void command() {
 		uint8_t c = cmd[0] & 0x3f;
 		uint32_t arg = (uint32_t)cmd[1] << 24 | cmd[2] << 16 | cmd[3] << 8 | cmd[4];
+		if (getenv("SD_DEBUG")) fprintf(stderr, "[sd] CMD%d %08x%s\n", c, arg, app ? " (app)" : "");
 		bool a = app; app = false;
 		if (a && c == 41) { idle = false; r1(0x00); return; }
 		switch (c) {

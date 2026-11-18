@@ -68,18 +68,20 @@ impl Vdp {
                     3
                 } else if p[1] == 0 {
                     // VDU 23,0,cmd,...: system packets
+                    // the lengths of VDU 23,0,cmd from agon-vdp vdu_sys.h (the variable-length
+                    // audio / mouse / font / buffer commands are not parsed: 10)
                     match p[2] {
-                        0x80 => 4, // general poll, 1 byte
-                        0x86 => 3, // mode information
                         0x87 => {
                             // RTC: 0 = read, 1 = set (6 bytes)
                             if p.len() >= 4 && p[3] == 1 { 10 } else { 4 }
                         }
-                        0x81 => 4, // keyboard locale
-                        0x82 => 3, // cursor position
-                        0x83 | 0x84 => 7,
-                        0x88 => 9, // keyboard control
-                        0xff => 3, // terminal mode
+                        0x0a | 0x0b | 0x80 | 0x81 | 0x8a | 0x8b | 0x94 | 0x98 | 0x99 | 0xc0 | 0xc1 | 0xf2 | 0xfe => 4,
+                        0x82 | 0x86 | 0x91 | 0x9a | 0x9c | 0x9d | 0x9e | 0x9f | 0xc3 | 0xca | 0xff => 3,
+                        0x83 | 0x84 | 0x93 | 0xf8 => 7,
+                        0x88 => 8,
+                        0x8c | 0x9b | 0xf9 => 5,
+                        0x92 | 0x96 => 6,
+                        0x90 => 12,
                         _ => 10,
                     }
                 } else {
@@ -97,6 +99,10 @@ impl Vdp {
                 0x80 => self.reply(&[0x80, 1, cmd[3]]),
                 0x86 => self.reply(&[0x86, 7, 0x80, 2, 0xe0, 1, 80, 60, 16]), // 640x480, 80x60, 16 colours
                 0x87 if cmd[3] == 0 => self.reply(&[0x87, 6, 46, 10, 18, 12, 0, 0]), // RTC: fixed date
+                // read colour: the pixel packet (R, G, B, logical); white, as the VDP sends for a
+                // known colour (MOS waits up to ~1 s for it)
+                0x94 => self.reply(&[0x84, 4, 0xff, 0xff, 0xff, if cmd[3] < 64 { cmd[3] } else { 15 }]),
+                0xf8 | 0x99 => {} // no reply (0x99: the key state comes in key packets)
                 v => eprintln!("[fake vdp: VDU 23,0,&{:02x} not answered]", v),
             }
         }
