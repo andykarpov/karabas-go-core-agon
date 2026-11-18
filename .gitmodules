@@ -1,3 +1,15 @@
 [submodule "modules"]
 	path = modules
 	url = ../karabas-go-modules.git
+[submodule "upstream/userspace-vdp-gl"]
+	path = upstream/userspace-vdp-gl
+	url = https://github.com/tomm/userspace-vdp-gl.git
+[submodule "upstream/agon-vdp"]
+	path = upstream/agon-vdp
+	url = https://github.com/tomm/agon-vdp.git
+[submodule "upstream/agon-mos"]
+	path = upstream/agon-mos
+	url = https://github.com/AgonPlatform/agon-mos.git
+[submodule "upstream/fab-agon-emulator"]
+	path = upstream/fab-agon-emulator
+	url = https://github.com/tomm/fab-agon-emulator.git

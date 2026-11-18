@@ -1,0 +1,38 @@
+/* VDP firmware: program, data, heap and stack in one region (made by the Makefile).
+   SRAM 4 MB at 0, SDRAM 32 MB at 0x10000000, MMIO at 0x80000000 (src/vdp/mmio.h). */
+OUTPUT_ARCH("riscv")
+ENTRY(_start)
+
+MEMORY { RAM (rwx) : ORIGIN = @ORG@, LENGTH = @LEN@ }
+
+STACK_SIZE = 64K;
+
+SECTIONS
+{
+    .text : {
+        KEEP(*(.text.start))
+        *(.text .text.*)
+    } > RAM
+    .rodata : ALIGN(8) {
+        *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
+    } > RAM
+    .init_array : { PROVIDE_HIDDEN(__init_array_start = .); KEEP(*(SORT(.init_array.*))) KEEP(*(.init_array)) PROVIDE_HIDDEN(__init_array_end = .); } > RAM
+    .fini_array : { PROVIDE_HIDDEN(__fini_array_start = .); KEEP(*(SORT(.fini_array.*))) KEEP(*(.fini_array)) PROVIDE_HIDDEN(__fini_array_end = .); } > RAM
+    .data : ALIGN(8) {
+        *(.data .data.*)
+        __global_pointer$ = . + 0x800;
+        *(.sdata .sdata.*)
+    } > RAM
+    .bss (NOLOAD) : ALIGN(8) {
+        __bss_start = .;
+        *(.sbss .sbss.*)
+        *(.bss .bss.*)
+        *(COMMON)
+        . = ALIGN(8);
+        __bss_end = .;
+    } > RAM
+    __heap_start = .;
+    __stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    __heap_end = __stack_top - STACK_SIZE;
+}

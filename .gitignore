@@ -89,3 +89,7 @@ src/measure/xst_classic.log
 !src/cpc.prj
 src/build_*.log
 src/sim/build/
+
+# Ф0 VDP firmware / ISS builds
+src/vdp/build-*/
+src/sim/iss
