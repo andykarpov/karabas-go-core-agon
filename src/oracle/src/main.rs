@@ -131,8 +131,93 @@ fn arg<T: std::str::FromStr>(a: &[String], name: &str) -> Option<T> {
     a.iter().position(|x| x == name).and_then(|i| a.get(i + 1)).and_then(|v| v.parse().ok())
 }
 
+// --z80 prog.bin: a bare Z80 (the crate's Z80 mode) with 64 KB RAM (the program at 0, the rest
+// from --fill seed), ports read as (port low ^ high ^ 0x5a), no interrupts. For the testbench of
+// the unmodified T80 (Ф1.1). Trace: the same columns (ADL / MADL / MB = 0, SPL = 0), the shadow
+// registers and R are not in it.
+struct Z80Bus {
+    mem: Vec<u8>,
+    ev: Vec<KgEv>,
+}
+impl ez80::Machine for Z80Bus {
+    fn peek(&self, a: u32) -> u8 {
+        self.mem[(a & 0xffff) as usize]
+    }
+    fn poke(&mut self, a: u32, v: u8) {
+        self.ev.push(KgEv::MemW(a & 0xffff, v));
+        self.mem[(a & 0xffff) as usize] = v;
+    }
+    fn use_cycles(&self, _c: i32) {}
+    fn port_in(&mut self, p: u16) -> u8 {
+        let v = (p as u8) ^ ((p >> 8) as u8) ^ 0x5a;
+        self.ev.push(KgEv::IoR(p, v));
+        v
+    }
+    fn port_out(&mut self, p: u16, v: u8) {
+        self.ev.push(KgEv::IoW(p, v));
+    }
+}
+
+fn ev_text(ev: &[KgEv]) -> String {
+    let mut s = String::new();
+    for e in ev {
+        s += &match e {
+            KgEv::MemW(a, v) => format!(" w:{:06x}={:02x}", a, v),
+            KgEv::IoR(p, v) => format!(" r:{:04x}={:02x}", p, v),
+            KgEv::IoW(p, v) => format!(" o:{:04x}={:02x}", p, v),
+            KgEv::Int(v) => format!(" int:{:02x}", v),
+        };
+    }
+    s
+}
+
+fn run_z80(a: &[String], prog: &str) {
+    let n_max: u64 = arg(a, "--n").unwrap_or(100000);
+    let mut seed: u64 = arg(a, "--fill").unwrap_or(1);
+    let mut mem = vec![0u8; 65536];
+    for b in mem.iter_mut() {
+        // xorshift fill; no HALT (0x76): nothing would wake it
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let v = (seed >> 24) as u8;
+        *b = if v == 0x76 { 0 } else { v };
+    }
+    let p = std::fs::read(prog).expect("--z80 program");
+    mem[..p.len()].copy_from_slice(&p);
+    if let Some(path) = arg::<String>(a, "--mem-out") {
+        std::fs::write(path, &mem).unwrap();
+    }
+    let mut bus = Z80Bus { mem, ev: Vec::new() };
+    let mut cpu = ez80::Cpu::new_z80();
+    // SP after reset is undefined on the Z80: T80 sets FFFF, the crate 0
+    cpu.state.reg.set16(Reg16::SP, 0xffff);
+    let mut out = std::io::BufWriter::new(std::fs::File::create(arg::<String>(a, "--trace").expect("--trace")).unwrap());
+    for n in 1..=n_max {
+        let pc = cpu.state.pc();
+        bus.ev.clear();
+        cpu.execute_instruction(&mut bus);
+        let r = &cpu.state.reg;
+        writeln!(
+            out,
+            "{} 0 {:06x} 0 0 00 {:04x} {:06x} {:06x} {:06x} {:06x} {:06x} {:04x} 000000 {:02x} {} {}{}",
+            n, pc, r.get16(Reg16::AF), r.get16(Reg16::BC), r.get16(Reg16::DE), r.get16(Reg16::HL),
+            r.get16(Reg16::IX), r.get16(Reg16::IY), r.get16(Reg16::SP), r.get8(Reg8::I),
+            r.iff1 as u8, r.iff2 as u8, ev_text(&bus.ev)
+        )
+        .unwrap();
+        if cpu.is_halted() {
+            break;
+        }
+    }
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if let Some(prog) = arg::<String>(&a, "--z80") {
+        run_z80(&a, &prog);
+        return;
+    }
     let mos: String = arg(&a, "--mos").expect("--mos mos.bin");
     let ms: u64 = arg(&a, "--ms").unwrap_or(3000);
     let keys: String = arg::<String>(&a, "--keys").unwrap_or_default().replace("\\r", "\r");
