@@ -19,6 +19,7 @@
 #include <deque>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 struct Vdp {
 	std::deque<uint8_t> to_ez80;
@@ -93,6 +94,9 @@ int main(int argc, char **argv) {
 	std::string keys;
 	double ms = 5000, cpu_mhz = 56;
 	bool quiet = false;
+	// --vdp-rate B: the VDP side as a 64-byte FIFO drained at B bytes per second of F92 time, CTS
+	// low above 48 bytes, bytes to the eZ80 at most one per 1/B s (0: everything at once, CTS high)
+	double vdp_rate = 0;
 	const bool dbg = getenv("SYS_DEBUG") != nullptr;   // every 100 ms: PC and the port traffic
 	uint64_t iord = 0, iowr = 0, next_dbg = 0;
 	char last_io[64] = "";
@@ -105,6 +109,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--vdp-out")) vdpf = argv[++i];
 		else if (!strcmp(argv[i], "--sd-log")) sdlogf = argv[++i];
 		else if (!strcmp(argv[i], "--quiet")) quiet = true;
+		else if (!strcmp(argv[i], "--vdp-rate")) vdp_rate = atof(argv[++i]);
 	}
 	if (!flashf) { fprintf(stderr, "usage: %s --flash mos.bin --sd sd.img [--keys ..] [--ms N]\n", argv[0]); return 2; }
 	// keys: \r -> Enter, steps split by '|'
@@ -136,6 +141,9 @@ int main(int argc, char **argv) {
 	uint64_t next_vsync = frame, last_out = 0, next_key = 0;
 	size_t step = 0, kpos = 0; int kdown = 0;
 	std::deque<std::pair<uint8_t, uint8_t>> kq;
+	std::deque<uint8_t> vfifo;
+	uint64_t next_drain = 0, next_rx = 0;
+	size_t stall_max = 0;
 	while (sys < sys_end) {
 		// the clock enable of the F92 system clock
 		acc += ce_per_clk;
@@ -158,10 +166,25 @@ int main(int argc, char **argv) {
 		}
 		t->u0_rx_valid = 0;
 		t->eval();
-		if (!vdp.to_ez80.empty() && !t->u0_rx_full) { t->u0_rx_data = vdp.to_ez80.front(); t->u0_rx_valid = 1; vdp.to_ez80.pop_front(); }
+		bool rx_ok = vdp_rate == 0 || sys >= next_rx;
+		if (rx_ok && !vdp.to_ez80.empty() && !t->u0_rx_full) {
+			t->u0_rx_data = vdp.to_ez80.front(); t->u0_rx_valid = 1; vdp.to_ez80.pop_front();
+			if (vdp_rate > 0) next_rx = sys + (uint64_t)(18432000 / vdp_rate);
+		}
 		// eZ80 -> VDP
-		t->u0_tx_ready = t->u0_tx_valid;
-		if (t->u0_tx_valid) { vdp.put(t->u0_tx_data); last_out = sys; }
+		if (vdp_rate == 0) {
+			t->u0_tx_ready = t->u0_tx_valid;
+			if (t->u0_tx_valid) { vdp.put(t->u0_tx_data); last_out = sys; }
+		} else {
+			if (!vfifo.empty() && sys >= next_drain) {
+				vdp.put(vfifo.front()); vfifo.pop_front(); last_out = sys;
+				next_drain = sys + (uint64_t)(18432000 / vdp_rate);
+			}
+			t->u0_tx_ready = t->u0_tx_valid && vfifo.size() < 64;
+			if (t->u0_tx_ready) { vfifo.push_back(t->u0_tx_data); last_out = sys; }
+			t->u0_cts = vfifo.size() <= 48;
+			stall_max = std::max(stall_max, vfifo.size());
+		}
 		// memory
 		uint8_t md = 0xf5;
 		if (t->sel_ram) md = ram[t->maddr & 0x1fff];
@@ -194,6 +217,7 @@ int main(int argc, char **argv) {
 	}
 	if (vdp.log) fclose(vdp.log);
 	if (sdlogf) { FILE *f = fopen(sdlogf, "w"); for (auto &s : sd.log) fprintf(f, "%s\n", s.c_str()); fclose(f); }
+	if (vdp_rate > 0) printf("\nvdp link: %.0f B/s, FIFO up to %zu bytes", vdp_rate, stall_max);
 	printf("\nsys: %.0f ms of F92 time, %llu core clocks, %llu instructions, %zu SD sectors, keys %zu / %zu steps\n",
 	       sys / 18432.0, (unsigned long long)clocks, (unsigned long long)insns, sd.log.size(), step, steps.size());
 	delete t;
