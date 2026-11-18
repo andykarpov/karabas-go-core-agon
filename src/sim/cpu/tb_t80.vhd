@@ -25,7 +25,9 @@ entity tb_t80 is
 		halt_n  : out std_logic;
 		insn    : out std_logic;
 		regs    : out std_logic_vector(211 downto 0);
-		regx    : out std_logic_vector(127 downto 0)
+		regx    : out std_logic_vector(127 downto 0);
+		mcyc    : out std_logic_vector(3 downto 0);  -- debug: M-cycle, T-state
+		tst     : out std_logic_vector(2 downto 0)
 	);
 end tb_t80;
 
@@ -38,6 +40,8 @@ architecture rtl of tb_t80 is
 	signal MCycle     : std_logic_vector(3 downto 0);
 	signal TState     : std_logic_vector(2 downto 0);
 begin
+	mcyc <= MCycle;
+	tst <= TState;
 	u0 : T80
 		generic map(Mode => 0, IOWait => 1, EZ80 => EZ80)
 		port map(

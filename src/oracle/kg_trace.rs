@@ -74,10 +74,23 @@ impl AgonMachine {
         assert!(!self.enable_hostfs, "kg_step_logged: hostfs must be off");
         ev.clear();
         self.last_pc = cpu.state.pc();
+        // eZ80 flag bits 3 and 5: unchanged by every instruction but the whole-F loads (POP AF,
+        // EX AF,AF'), as CEmu (cpuflag_undef); the crate copies the Z80 rules in most places
+        let pc = cpu.state.pc();
+        let mut op = self.kg_peek_raw(pc);
+        if matches!(op, 0x40 | 0x49 | 0x52 | 0x5b) {
+            op = self.kg_peek_raw(pc.wrapping_add(1));
+        }
+        let f_load = op == 0xf1 || op == 0x08;
+        let xy = cpu.state.reg.get8(Reg8::F) & 0x28;
         if cpu.is_halted() {
             self.cycle_counter.set(self.cycle_counter.get().wrapping_add(4));
         } else {
             cpu.fast_execute_instruction(&mut KgBus { m: self, ev });
+        }
+        if !f_load {
+            let f = (cpu.state.reg.get8(Reg8::F) & !0x28) | xy;
+            cpu.state.reg.set8(Reg8::F, f);
         }
         if self.cycle_counter.get() >= self.interrupt_precision {
             self.apply_elapsed_cycles();
@@ -130,6 +143,19 @@ impl AgonMachine {
     }
 
     pub fn kg_peek(&self, address: u32) -> u8 {
-        self.peek(address)
+        self.kg_peek_raw(address)
+    }
+
+    /// A memory read without the side effects of peek() (it charges a cycle).
+    pub fn kg_peek_raw(&self, address: u32) -> u8 {
+        if let Some(a) = self.get_internal_ram_address(address) {
+            self.mem_internal[a as usize]
+        } else if let Some(a) = self.get_rom_address(address) {
+            self.mem_rom[a as usize]
+        } else if let Some(a) = self.get_external_ram_address(address) {
+            self.mem_external[a as usize]
+        } else {
+            0xf5
+        }
     }
 }

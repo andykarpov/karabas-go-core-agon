@@ -100,6 +100,7 @@ int main(int argc, char **argv) {
     std::vector<Ev> seen;        // writes since the last InsnStart
     size_t rd_idx = 0;           // next r: event of the instruction in progress
     bool prev_wr = true, prev_insn = false, prev_rd = true;
+    int int_vec = -1;            // the vector of the interrupt the oracle takes after the current instruction
     uint64_t cycles = 0, checked = 0;
     auto fail = [&](const char *what, const Line &l) {
         printf("FAIL at instruction %llu (pc %06x): %s\n", (unsigned long long)l.n, l.pc, what);
@@ -111,7 +112,12 @@ int main(int argc, char **argv) {
         top->clk = 1; top->eval();
         bool rd = top->rd_n == 0, wr = top->wr_n == 0;
         uint32_t a = EZ80 ? (((uint32_t)top->au << 16) | top->a) : top->a;
-        if (rd && !top->mreq_n) top->di = mem[a & AMASK];
+        if (!top->m1_n && !top->iorq_n && int_vec >= 0) {
+            // interrupt acknowledge: the vector on the bus, INT off
+            top->di = (uint8_t)int_vec;
+            top->int_n = 1;
+            int_vec = -1;
+        } else if (rd && !top->mreq_n) top->di = mem[a & AMASK];
         else if (rd && !top->iorq_n) {
             const Line *cur = (k >= 1 && k <= tr.size()) ? &tr[k - 1] : nullptr;
             if (!prev_rd && cur) {
@@ -134,8 +140,6 @@ int main(int argc, char **argv) {
         if (insn && !prev_insn) {
             if (k >= 1) {
                 const Line &l = tr[k - 1];
-                for (auto &e : l.ev)
-                    if (e.k == 'i') fail("the oracle takes an interrupt here (not in the testbench yet)", l);
                 const auto &r = top->regs;
                 uint32_t A = field(r, 0, 8), F = field(r, 8, 8), SPS = field(r, 48, 16), PC = field(r, 64, 16);
                 uint32_t BC = field(r, 80, 16), DE = field(r, 96, 16), HL = field(r, 112, 16), IX = field(r, 128, 16), IY = field(r, 192, 16);
@@ -188,9 +192,18 @@ int main(int argc, char **argv) {
             seen.clear();
             rd_idx = 0;
             k++;
+            // the oracle takes an interrupt after instruction k: INT on now, during it
+            if (k >= 1 && k <= tr.size())
+                for (auto &e : tr[k - 1].ev)
+                    if (e.k == 'i') { int_vec = (int)e.a; top->int_n = 0; }
             if (k > tr.size() || k > max) break;
         }
         prev_insn = insn;
+        if (getenv("TB_DEBUG") && k >= (uint64_t)atoll(getenv("TB_DEBUG")) && k <= (uint64_t)atoll(getenv("TB_DEBUG")) + 1) {
+            const auto &x = top->regx;
+            printf("  k %llu M%u T%u a %06x rd%d wr%d mreq%d di %02x do %02x IYU %02x IXU %02x\n", (unsigned long long)k,
+                   top->mcyc, top->tst, a, rd, wr, top->mreq_n ? 0 : 1, top->di, top->dout, field(x, 120, 8), field(x, 88, 8));
+        }
         top->clk = 0; top->eval();
         cycles++;
     }

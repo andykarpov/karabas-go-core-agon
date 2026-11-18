@@ -20,8 +20,13 @@ $(EZ)/.ready: Makefile
 	git clone -q https://github.com/tomm/ez80.git $(EZ)
 	git -C $(EZ) checkout -q $(EZREV)
 	# IN0 r,(n): flags as IN r,(C) (S, Z, P parity, H = N = 0, C kept), not as a subtraction
+	# (flag bits 3 and 5: kept for all instructions by kg_trace.rs)
 	sed -i 's/env.state.reg.update_arithmetic_flags(data as u16, data as u16, data as u16, true, false); /env.state.reg.update_bits_in_flags(data); \/\/ karabas: IN0 flags (CEmu, UM0077)/' $(EZ)/src/opcode_io.rs
 	grep -q 'karabas: IN0 flags' $(EZ)/src/opcode_io.rs
+	# 24-bit ADD / ADC / SBC: H from bit 12 as the 16-bit ones (CEmu cpuflag_halfcarry_w_*), not bit 20
+	sed -i -e '/env.state.reg.update_add24_flags(aaa, bbb, vvvv);/a\    env.state.reg.put_flag(Flag::H, ((aaa ^ bbb ^ vvvv) >> 12) \& 1 != 0); // karabas: H from bit 12 (CEmu)' \
+	       -e '/env.state.reg.update_arithmetic_flags_24(aaa, bbb, vvvv, \(true\|false\));/a\    env.state.reg.put_flag(Flag::H, ((aaa ^ bbb ^ vvvv) >> 12) \& 1 != 0); // karabas: H from bit 12 (CEmu)' $(EZ)/src/operators.rs
+	test $$(grep -c 'karabas: H from bit 12' $(EZ)/src/operators.rs) = 3
 	touch $@
 
 $(CR)/.ready: $(EMU)/agon-ez80-emulator/Cargo.toml $(wildcard $(EMU)/agon-ez80-emulator/src/*.rs) kg_trace.rs Makefile

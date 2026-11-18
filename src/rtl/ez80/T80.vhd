@@ -165,6 +165,17 @@ architecture rtl of T80 is
 	signal UOp, UOp_r           : std_logic_vector(1 downto 0);
 	signal BusBU                : std_logic;
 	signal LDU                  : std_logic;
+	signal EzRA, EzRB, EzRC     : std_logic_vector(3 downto 0);
+	signal AddrWZ, WZAdd, WZToReg : std_logic;
+	signal EzBusB               : std_logic_vector(1 downto 0);
+	signal BusBMode, IntVec, JumpV : std_logic;
+	signal Sfx_s, ModeB, LDMode, JumpM : std_logic;
+	signal StkSelA, StkSelI     : std_logic_vector(1 downto 0);
+	signal SPA_L, SPI_L         : std_logic;  -- the stack for the address / inc-dec is SPL
+	signal RegWEU_wz            : std_logic;
+	signal RegWEU_dh            : std_logic;  -- EX DE,HL upper bytes
+	signal RegBusAU_r           : std_logic_vector(7 downto 0);
+	signal MLT_P                : unsigned(15 downto 0);
 
 	signal RegDIH               : std_logic_vector(7 downto 0);
 	signal RegDIL               : std_logic_vector(7 downto 0);
@@ -315,8 +326,10 @@ begin
 	-- karabas: eZ80 helpers
 	Ez <= '1' when EZ80 /= 0 else '0';
 	PCxU <= PCU when ADL = '1' else MBASE;
-	SPcur <= SPL(15 downto 0) when L_s = '1' else SP;
-	SPcurU <= std_logic_vector(SPL(23 downto 16)) when L_s = '1' else MBASE;
+	SPA_L <= '1' when StkSelA = "01" or (StkSelA = "10" and ADL = '1') or (StkSelA = "00" and L_s = '1') else '0';
+	SPI_L <= '1' when StkSelI = "01" or (StkSelI = "10" and ADL = '1') or (StkSelI = "00" and L_s = '1') else '0';
+	SPcur <= SPL(15 downto 0) when SPA_L = '1' else SP;
+	SPcurU <= std_logic_vector(SPL(23 downto 16)) when SPA_L = '1' else MBASE;
 	AU <= AU_r;
 	REGX <= DORU & "0000" & IL_s & L_s & MADL & ADL & MBASE & std_logic_vector(SPL) & PCxU & std_logic_vector(PC);
 
@@ -347,6 +360,23 @@ begin
 			UOp         => UOp,
 			BusBU       => BusBU,
 			LDU         => LDU,
+			EzRA        => EzRA,
+			EzRB        => EzRB,
+			EzRC        => EzRC,
+			AddrWZ      => AddrWZ,
+			WZAdd       => WZAdd,
+			WZToReg     => WZToReg,
+			EzBusB      => EzBusB,
+			MADLm       => MADL,
+			BusBMode    => BusBMode,
+			IntVec      => IntVec,
+			JumpV       => JumpV,
+			Sfxm        => Sfx_s,
+			ModeBm      => ModeB,
+			StkSelA     => StkSelA,
+			StkSelI     => StkSelI,
+			LDMode      => LDMode,
+			JumpM       => JumpM,
 			ISet        => ISet,
 			MCycle      => MCycle,
 			F           => F,
@@ -461,7 +491,7 @@ begin
 			WZ <= (others => '0');
 			PCU <= (others => '0'); WZU <= (others => '0'); AU_r <= (others => '0'); -- karabas
 			MBASE <= (others => '0'); SPL <= (others => '0');
-			ADL <= '0'; MADL <= '0'; L_s <= '0'; IL_s <= '0';
+			ADL <= '0'; MADL <= '0'; L_s <= '0'; IL_s <= '0'; Sfx_s <= '0'; ModeB <= '0';
 			IR <= "00000000";
 			ISet <= "00";
 			XY_State <= "00";
@@ -570,28 +600,34 @@ begin
 							end if;
 						end if;
 
-						if IntCycle = '1' and IStatus = "01" then
+						if IntCycle = '1' and IStatus = "01" and Ez = '0' then
 							IR <= "11111111";
-						elsif Halt_FF = '1' or (IntCycle = '1' and IStatus = "10") or NMICycle = '1' then
+						elsif Halt_FF = '1' or (IntCycle = '1' and (IStatus = "10" or Ez = '1')) or NMICycle = '1' then
 							IR <= "00000000";
 						else
 							IR <= DInst;
 						end if;
 
-						if Mode <= 1 and IntCycle = '1' and IStatus = "10" then
-							-- IM2 vector address low byte from bus
+						if Mode <= 1 and IntCycle = '1' and (IStatus = "10" or Ez = '1') then
+							-- IM2 vector address low byte from bus (karabas: always in eZ80 mode)
 							WZ(7 downto 0) <= DInst;
 						end if;
 
 						ISet <= "00";
 						-- karabas: L / IL: from a suffix just fetched, else from ADL at a new instruction
 						if Ez = '1' then
-							if Suffix = '1' then
+							if IntCycle = '1' or NMICycle = '1' then
+								L_s <= ADL or MADL;   -- karabas: interrupt entry (CEmu)
+								IL_s <= ADL or MADL;
+								Sfx_s <= '0';
+							elsif Suffix = '1' then
 								L_s <= IR(3);
 								IL_s <= IR(4);
+								Sfx_s <= '1';
 							elsif Prefix = "00" then
 								L_s <= ADL;
 								IL_s <= ADL;
+								Sfx_s <= '0';
 							end if;
 						end if;
 						if Prefix /= "00" then
@@ -626,7 +662,36 @@ begin
 
 					if T_Res = '1' then
 						BTR_r <= (I_BT or I_BC or I_BTR) and not No_BTR;
-						if Jump = '1' then
+						if Ez = '1' and IntVec = '1' then
+							-- karabas: the interrupt vector table entry at 00:I:vector
+							A <= I & WZ(7 downto 0);
+							PC <= unsigned(I & WZ(7 downto 0));
+							AU_r <= (others => '0');
+							PCU <= (others => '0');
+						elsif Ez = '1' and JumpM = '1' then
+							-- karabas: the mixed return: mode 1 -> ADL, the upper byte = DI (00 unless
+							-- ADL or L); mode 0 -> Z80 mode, MBASE
+							A <= WZ;
+							PC <= unsigned(WZ);
+							if ModeB = '1' then
+								if (ADL or L_s) = '1' then AU_r <= DI_Reg; PCU <= DI_Reg;
+								else AU_r <= (others => '0'); PCU <= (others => '0'); end if;
+								ADL <= '1';
+							else
+								AU_r <= MBASE; PCU <= MBASE; ADL <= '0';
+							end if;
+						elsif Ez = '1' and JumpV = '1' then
+							-- karabas: to the 16-bit handler address, upper 00 in ADL (MBASE in Z80 mode)
+							A(15 downto 8) <= DI_Reg;
+							A(7 downto 0) <= WZ(7 downto 0);
+							PC(15 downto 8) <= unsigned(DI_Reg);
+							PC(7 downto 0) <= unsigned(WZ(7 downto 0));
+							if (ADL or MADL) = '1' then
+								AU_r <= (others => '0'); PCU <= (others => '0'); ADL <= '1';
+							else
+								AU_r <= MBASE; PCU <= MBASE;
+							end if;
+						elsif Jump = '1' then
 							if Ez = '1' and IL_s = '1' then
 								-- karabas: 24-bit jump: WZ = low / high, DI = upper; the mode becomes IL
 								A <= WZ;
@@ -669,7 +734,7 @@ begin
 							A <= "0000000001100110";
 							PC <= "0000000001100110";
 						elsif ((Mode /= 3 and MCycle = "0011") or (Mode = 3 and MCycle = "0100"))
-							and IntCycle = '1' and IStatus = "10" then
+							and IntCycle = '1' and IStatus = "10" and Ez = '0' then -- karabas: eZ80 uses IntVec
 							A(15 downto 8) <= I;
 							A(7 downto 0) <= WZ(7 downto 0);
 							PC(15 downto 8) <= unsigned(I);
@@ -680,6 +745,9 @@ begin
 								if XY_State = "00" then
 									A <= RegBusC;
 									if L_s = '1' then AU_r <= RegBusCU; else AU_r <= MBASE; end if; -- karabas
+									if Ez = '1' and AddrWZ = '1' then -- karabas: the address on in WZ
+										WZ <= RegBusC; WZU <= RegBusCU;
+									end if;
 								else
 									if NextIs_XY_Fetch = '1' then
 										A <= std_logic_vector(PC);
@@ -869,6 +937,16 @@ begin
 							WZU <= (others => '0'); -- karabas
 						end if;
 					end if;
+					if Ez = '1' and WZAdd = '1' and TState = 3 then -- karabas: LEA / PEA base + d
+						WZ <= std_logic_vector(signed(RegBusC) + signed(DI_Reg));
+						if DI_Reg(7) = '0' and unsigned(RegBusC) + unsigned(DI_Reg) > 16#FFFF# then
+							WZU <= std_logic_vector(unsigned(RegBusCU) + 1);
+						elsif DI_Reg(7) = '1' and unsigned(RegBusC) < unsigned(not DI_Reg) + 1 then
+							WZU <= std_logic_vector(unsigned(RegBusCU) - 1);
+						else
+							WZU <= RegBusCU;
+						end if;
+					end if;
 					if TState = 3 and MCycle = "1110" then
 						WZ <= std_logic_vector(signed(RegBusC) + signed(DI_Reg));
 						if Ez = '1' then -- karabas: the upper byte of IX+d / IY+d
@@ -890,7 +968,7 @@ begin
 
 					if (TState = 2 and Wait_n = '1') or (TState = 4 and MCycle = "0001") then
 						if IncDec_16(2 downto 0) = "111" then
-							if Ez = '1' and L_s = '1' then -- karabas: SPL
+							if Ez = '1' and SPI_L = '1' then -- karabas: SPL
 								if IncDec_16(3) = '1' then
 									SPL <= SPL - 1;
 								else
@@ -936,6 +1014,9 @@ begin
 					end if;
 					if LDU = '1' then -- karabas
 						WZU <= DI_Reg;
+					end if;
+					if Ez = '1' and LDMode = '1' then -- karabas: the popped mode byte
+						ModeB <= DI_Reg(0);
 					end if;
 
 					-- karabas: eZ80 register operations
@@ -1092,6 +1173,13 @@ begin
 						DO <= ALU_Q;
 					end if;
 				end if;
+				-- karabas: eZ80: flag bits 3 and 5 keep their value (CEmu "cpuflag_undef", the oracle
+				-- agrees) except where F is loaded whole (POP AF, EX AF,AF')
+				if Ez = '1' and ExchangeAF = '0' and not ((Read_To_Reg_r = "11011") and
+						((TState = 1 and Save_ALU_r = '0' and Auto_Wait_t1 = '0') or (Save_ALU_r = '1' and ALU_OP_r /= "0111"))) then
+					F(Flag_X) <= F(Flag_X);
+					F(Flag_Y) <= F(Flag_Y);
+				end if;
 			end if;
 		end if;
 	end process;
@@ -1162,6 +1250,21 @@ begin
 				if ((JumpXY = '1' or LDSPHL = '1') and XY_State /= "00") or (MCycle = "1110") then
 					RegAddrC <= XY_State(1) & "11";
 				end if;
+				-- karabas: register selections forced by eZ80 instructions (IX / IY or a pair with EXX)
+				if Ez = '1' then
+					if EzRA(3) = '1' then
+						if EzRA(1 downto 0) = "11" then RegAddrA_r <= EzRA(2) & "11";
+						else RegAddrA_r <= Alternate & EzRA(1 downto 0); end if;
+					end if;
+					if EzRB(3) = '1' then
+						if EzRB(1 downto 0) = "11" then RegAddrB_r <= EzRB(2) & "11";
+						else RegAddrB_r <= Alternate & EzRB(1 downto 0); end if;
+					end if;
+					if EzRC(3) = '1' then
+						if EzRC(1 downto 0) = "11" then RegAddrC <= EzRC(2) & "11";
+						else RegAddrC <= Alternate & EzRC(1 downto 0); end if;
+					end if;
+				end if;
 
 				if I_DJNZ = '1' and Save_ALU_r = '1' and Mode < 2 then
 					IncDecZ <= F_Out(Flag_Z);
@@ -1177,6 +1280,7 @@ begin
 				end if;
 
 				RegBusA_r <= RegBusA;
+				RegBusAU_r <= RegBusAU; -- karabas
 			end if;
 		end if;
 	end process;
@@ -1208,7 +1312,7 @@ begin
 	ID16 <= signed(RegBusA) - 1 when IncDec_16(3) = '1' else
 			signed(RegBusA) + 1;
 
-	process (Save_ALU_r, Auto_Wait_t1, ALU_OP_r, Read_To_Reg_r, I_MULU, T_Res, UOp_r,
+	process (Save_ALU_r, Auto_Wait_t1, ALU_OP_r, Read_To_Reg_r, I_MULU, T_Res, UOp_r, Ez, WZToReg, EzOp,
 			ExchangeDH, ExchangeWH, IncDec_16, MCycle, TState, Wait_n, LDHLSP)
 	begin
 		RegWEH <= '0';
@@ -1230,6 +1334,12 @@ begin
 				end if;
 			when others =>
 			end case;
+		end if;
+
+		-- karabas: LEA (the pair <= WZ), MLT (the pair <= low * high)
+		if Ez = '1' and ((WZToReg = '1' and TState = 3) or (EzOp = "0101" and TState = 3 and MCycle = "0010")) then
+			RegWEH <= '1';
+			RegWEL <= '1';
 		end if;
 
 		if I_MULU = '1' and (T_Res = '1' or TState = 4) then    -- TState = 4 DE write
@@ -1263,13 +1373,22 @@ begin
 	RegWEU_id <= '1' when Ez = '1' and L_s = '1' and IncDec_16(2) = '1' and IncDec_16(1 downto 0) /= "11" and
 	                      ((TState = 2 and Wait_n = '1' and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) else '0';
 	RegWEU_xw <= '1' when Ez = '1' and L_s = '1' and ExchangeWH = '1' and TState = 4 else '0'; -- EX (SP),HL
-	RegWEU <= (RegWEU_rd and Ez) or RegWEU_id or RegWEU_xw;
-	RegDIU <= std_logic_vector(ID24(23 downto 16)) when RegWEU_id = '1' else
-	          WZU when RegWEU_xw = '1' else
+	RegWEU_wz <= '1' when Ez = '1' and L_s = '1' and ((WZToReg = '1' and TState = 3) or
+	                      (EzOp = "0101" and TState = 3 and MCycle = "0010")) else '0';       -- LEA, MLT
+	MLT_P <= unsigned(RegBusA(15 downto 8)) * unsigned(RegBusA(7 downto 0));
+	-- EX DE,HL: CEmu swaps the L-masked values (24 bits with L, the upper bytes cleared without)
+	RegWEU_dh <= '1' when Ez = '1' and ExchangeDH = '1' and (TState = 3 or TState = 4) else '0';
+	RegWEU <= (RegWEU_rd and Ez) or RegWEU_id or RegWEU_xw or RegWEU_wz or RegWEU_dh;
+	RegDIU <= (others => '0') when RegWEU_dh = '1' and L_s = '0' else
+	          RegBusBU when RegWEU_dh = '1' and TState = 3 else
+	          RegBusAU_r when RegWEU_dh = '1' else
+	          std_logic_vector(ID24(23 downto 16)) when RegWEU_id = '1' else
+	          WZU when RegWEU_xw = '1' or (RegWEU_wz = '1' and WZToReg = '1') else
+	          (others => '0') when RegWEU_wz = '1' else
 	          Save_Mux when UOp_r = "01" else (others => '0');
 
 	process (Save_Mux, RegBusB, RegBusA_r, ID16, I_MULU, MULU_Prod32, MULU_tmp, T_Res,
-			ExchangeDH, ExchangeWH, IncDec_16, MCycle, TState, Wait_n, LDHLSP, TmpAddr2, WZ)
+			ExchangeDH, ExchangeWH, IncDec_16, MCycle, TState, Wait_n, LDHLSP, TmpAddr2, WZ, Ez, WZToReg, EzOp, MLT_P)
 	begin
 		RegDIH <= Save_Mux;
 		RegDIL <= Save_Mux;
@@ -1300,6 +1419,14 @@ begin
 		if ExchangeWH = '1' and TState = 4 then
 			RegDIH <= WZ(15 downto 8);
 			RegDIL <= WZ(7 downto 0);
+		end if;
+		if Ez = '1' and WZToReg = '1' and TState = 3 then -- karabas: LEA
+			RegDIH <= WZ(15 downto 8);
+			RegDIL <= WZ(7 downto 0);
+		end if;
+		if Ez = '1' and EzOp = "0101" and TState = 3 and MCycle = "0010" then -- karabas: MLT
+			RegDIH <= std_logic_vector(MLT_P(15 downto 8));
+			RegDIL <= std_logic_vector(MLT_P(7 downto 0));
 		end if;
 		if IncDec_16(2) = '1' and ((TState = 2 and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) then
 			RegDIH <= std_logic_vector(ID16(15 downto 8));
@@ -1375,6 +1502,19 @@ begin
 				when others =>
 					BusB <= "--------";
 				end case;
+				-- karabas: the interrupt mode byte
+				if Ez = '1' and BusBMode = '1' then
+					BusB <= "000000" & MADL & ADL;
+				end if;
+				-- karabas: WZ bytes (PEA)
+				if Ez = '1' then
+					case EzBusB is
+					when "01" => BusB <= WZ(7 downto 0);
+					when "10" => BusB <= WZ(15 downto 8);
+					when "11" => BusB <= WZU;
+					when others => null;
+					end case;
+				end if;
 				-- karabas: the upper byte of the pair / SP / PC
 				if Ez = '1' and BusBU = '1' then
 					case Set_BusB_To is
@@ -1468,7 +1608,7 @@ begin
 	--   IntCycle/NMICycle  interrupt acknowledge, not an instruction start
 	-- RETN needs no exclusion: I_RETN is decoded in its own M3.
 	InsnStart <= '1' when MCycle = "0001" and TState = 2 and Prefix = "00" and Suffix = '0' and
-	                      SetEI = '0' and IntCycle = '0' and NMICycle = '0' else '0';
+	                      (SetEI = '0' or Ez = '1') and IntCycle = '0' and NMICycle = '0' else '0';
 -------------------------------------------------------------------------
 --
 -- Main state machine
@@ -1515,11 +1655,19 @@ begin
 					No_BTR <= (I_BT and (not IR(4) or not F(Flag_P))) or
 							(I_BC and (not IR(4) or F(Flag_Z) or not F(Flag_P))) or
 							(I_BTR and (not IR(4) or F(Flag_Z)));
-					if TState = 2 then
+					if TState = 2 and Ez = '0' then
 						if SetEI = '1' then
 							IntE_FF1 <= '1';
 							IntE_FF2 <= '1';
 						end if;
+					end if;
+					-- karabas: eZ80: EI sets IFF in its own M1 (T3), so the next InsnStart shows it; an
+					-- interrupt still waits one instruction (no acceptance while SetEI at the end of EI)
+					if TState = 3 and Ez = '1' and SetEI = '1' and MCycle = "0001" then
+						IntE_FF1 <= '1';
+						IntE_FF2 <= '1';
+					end if;
+					if TState = 2 then
 						if I_RETN = '1' then
 							IntE_FF1 <= IntE_FF2;
 						end if;

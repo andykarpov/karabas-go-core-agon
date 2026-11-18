@@ -103,6 +103,25 @@ entity T80_MCode is
                                            -- upper byte of the pair / SPL, 10 also clear the upper byte
       BusBU       : out std_logic;         -- BusB = the upper byte of the Set_BusB_To pair / SP / PC
       LDU         : out std_logic;         -- WZ(23:16) <= DI at T3 (the third byte of a 24-bit nn)
+      -- register selections forced by eZ80 instructions: bit 3 = force, bits 1..0 = pair BC / DE /
+      -- HL (with EXX), "11" = IX (bit 2 = 0) or IY (bit 2 = 1)
+      EzRA        : out std_logic_vector(3 downto 0);  -- write / BusA pair
+      EzRB        : out std_logic_vector(3 downto 0);  -- BusB pair
+      EzRC        : out std_logic_vector(3 downto 0);  -- address / base pair
+      AddrWZ      : out std_logic;         -- with aXY / aBC / aDE: the address also to WZ (24 bits)
+      WZAdd       : out std_logic;         -- at T3: WZ <= base (EzRC) + d (DI), 24 bits
+      WZToReg     : out std_logic;         -- at T3: the EzRA pair <= WZ (24 bits with L)
+      EzBusB      : out std_logic_vector(1 downto 0);  -- BusB = WZ byte: 01 low, 10 high, 11 upper
+      MADLm       : in  std_logic := '0';
+      BusBMode    : out std_logic;         -- BusB = the mode byte (MADL << 1 | ADL) of an interrupt
+      IntVec      : out std_logic;         -- at T_Res: A / PC <= 00:I:WZ(7:0) (the vector table)
+      JumpV       : out std_logic;         -- at T_Res: jump to 00:DI:WZ(7:0), ADL <= ADL or MADL
+      Sfxm        : in  std_logic := '0';  -- the instruction had a suffix
+      ModeBm      : in  std_logic := '0';  -- bit 0 of the popped mode byte
+      StkSelA     : out std_logic_vector(1 downto 0);  -- aSP stack: 00 by L, 01 SPL, 10 by ADL
+      StkSelI     : out std_logic_vector(1 downto 0);  -- SP inc / dec stack: the same codes
+      LDMode      : out std_logic;         -- at T3: ModeB <= DI(0)
+      JumpM       : out std_logic;         -- at T_Res: the mixed-mode return jump (see T80.vhd)
       ISet        : in std_logic_vector(1 downto 0);
       MCycle      : in std_logic_vector(3 downto 0);
       F           : in std_logic_vector(7 downto 0);
@@ -203,7 +222,7 @@ architecture rtl of T80_MCode is
 
 begin
 
-	process (IR, ISet, MCycle, F, NMICycle, IntCycle, XY_State, R800_mode, Lm, ILm, ADLm)
+	process (IR, ISet, MCycle, F, NMICycle, IntCycle, XY_State, R800_mode, Lm, ILm, ADLm, MADLm, Sfxm, ModeBm)
 		variable DDD   : std_logic_vector(2 downto 0);
 		variable SSS   : std_logic_vector(2 downto 0);
 		variable DPair : std_logic_vector(1 downto 0);
@@ -213,6 +232,10 @@ begin
 		variable o     : integer;   -- 1 with a 24-bit immediate (IL)
 		variable lw    : integer;   -- 1 with 3-byte data (L)
 		variable dc    : integer;   -- the data cycle after the address: 0, 1, 2
+		variable np    : integer;   -- interrupt: the bytes to push
+		variable k2    : integer;
+		variable adlv  : integer;   -- 1 in ADL mode
+		variable done  : boolean;   -- a DD / FD eZ80 instruction took the cycle
 		-- clear the per-cycle outputs the Z80 code of an opcode set, before an eZ80 sequence
 		procedure ez_clear is
 		begin
@@ -220,7 +243,24 @@ begin
 			Read_To_Reg <= '0'; Read_To_Acc <= '0'; Write <= '0'; Jump <= '0'; NoRead <= '0';
 			Set_BusA_To <= "0000"; Set_BusB_To <= "0000"; SetWZ <= "00"; UOp <= "00"; BusBU <= '0';
 			IncDec_16 <= "0000"; Call <= '0'; RstP <= '0'; LDU <= '0'; No_PC <= '0';
+			-- and every operation of the Z80 aliases at eZ80 codes (NEG, RETN, IM n...)
+			Save_ALU <= '0'; Rot_Akku <= '0'; PreserveC <= '0'; Arith16 <= '0'; IORQ <= '0';
+			JumpE <= '0'; JumpXY <= '0'; LDSPHL <= '0'; Special_LD <= "000";
+			ExchangeDH <= '0'; ExchangeRp <= '0'; ExchangeAF <= '0'; ExchangeRS <= '0'; ExchangeWH <= '0';
+			I_DJNZ <= '0'; I_CPL <= '0'; I_CCF <= '0'; I_SCF <= '0'; I_RETN <= '0';
+			I_BT <= '0'; I_BC <= '0'; I_BTR <= '0'; I_RLD <= '0'; I_RRD <= '0'; I_INRC <= '0';
+			SetDI <= '0'; SetEI <= '0'; IMode <= "11"; Halt <= '0'; ALU_Op <= "0000";
 			if MCycle = "0001" then TStates <= "100"; else TStates <= "011"; end if;
+		end procedure;
+		-- in the d fetch cycles (M14, M15) of a DD / FD eZ80 instruction: off with the operations
+		-- of the Z80 opcode at the same code (RLCA at 07...), the fetch signals stay
+		procedure ez_clear_ops is
+		begin
+			Save_ALU <= '0'; Rot_Akku <= '0'; ALU_Op <= "0000"; Read_To_Reg <= '0'; Read_To_Acc <= '0';
+			Arith16 <= '0'; Write <= '0'; Jump <= '0'; JumpE <= '0'; JumpXY <= '0'; Call <= '0';
+			RstP <= '0'; LDZ <= '0'; LDW <= '0'; IncDec_16 <= "0000"; ExchangeDH <= '0'; ExchangeWH <= '0';
+			ExchangeAF <= '0'; ExchangeRS <= '0'; I_DJNZ <= '0'; I_CPL <= '0'; I_CCF <= '0'; I_SCF <= '0';
+			Special_LD <= "000"; LDSPHL <= '0'; Halt <= '0'; SetDI <= '0'; SetEI <= '0';
 		end procedure;
 		-- the nn of (nn): 2 bytes, 3 with IL; the address is formed in the last one (cycle 3 + o)
 		procedure ez_nn is
@@ -235,8 +275,11 @@ begin
 			end if;
 		end procedure;
 		-- a word at (nn) or (rr) into the pair pr (SP if sp): low, high, upper with L (dc = 0, 1, 2)
-		procedure ez_read_word(pr : std_logic_vector(1 downto 0); sp : boolean) is
+		procedure ez_read_word(pr_in : std_logic_vector(1 downto 0); sp : boolean) is
+			variable pr : std_logic_vector(1 downto 0);
 		begin
+			-- "11" (IX / IY, selected by EzRA) as a pair code: 011x would be A / DI
+			if pr_in = "11" then pr := "10"; else pr := pr_in; end if;
 			if dc >= 0 and dc <= 2 then
 				Read_To_Reg <= '1';
 				if sp then
@@ -254,8 +297,10 @@ begin
 		end procedure;
 		-- the bytes to write for a word: BusB in the cycle before each write (low in the address
 		-- cycle, dc = -1), the writes in dc = 0, 1, 2
-		procedure ez_write_word(pr : std_logic_vector(1 downto 0); sp : boolean) is
+		procedure ez_write_word(pr_in : std_logic_vector(1 downto 0); sp : boolean) is
+			variable pr : std_logic_vector(1 downto 0);
 		begin
+			if pr_in = "11" then pr := "10"; else pr := pr_in; end if;  -- IX / IY by EzRB
 			if dc >= 0 and dc <= 1 + lw then
 				Write <= '1';
 			end if;
@@ -309,6 +354,33 @@ begin
 			if k >= 1 and k <= nb then Write <= '1'; end if;
 			if k = nb then
 				if rst then RstP <= '1'; else Call <= '1'; end if;
+			end if;
+		end procedure;
+
+		-- RET / RET cc / RETI / RETN after a suffix (CEmu cpu_return): the mode byte from SPL, PC low /
+		-- high from the stack of ADL, the upper byte from SPL if the mode byte says ADL; ADL <= mode
+		procedure ez_pop_mixed is
+		begin
+			MCycles <= "0101";
+			if mc = 1 then StkSelA <= "01"; Set_Addr_To <= aSP; end if;
+			if mc = 2 then
+				StkSelI <= "01"; IncDec_16 <= "0111"; LDMode <= '1';
+				StkSelA <= "10"; Set_Addr_To <= aSP;
+			end if;
+			if mc = 3 then
+				LDZ <= '1'; StkSelI <= "10"; IncDec_16 <= "0111";
+				StkSelA <= "10"; Set_Addr_To <= aSP;
+			end if;
+			if mc = 4 then
+				LDW <= '1'; StkSelI <= "10"; IncDec_16 <= "0111";
+				if ModeBm = '1' then
+					StkSelA <= "01"; Set_Addr_To <= aSP;
+				else
+					MCycles <= "0100"; JumpM <= '1';
+				end if;
+			end if;
+			if mc = 5 then
+				StkSelI <= "01"; IncDec_16 <= "0111"; JumpM <= '1';
 			end if;
 		end procedure;
 		-- pop the return address from cycle 1: L, H, U (with L); the jump in the last one
@@ -391,6 +463,10 @@ begin
 		UOp <= "00";
 		BusBU <= '0';
 		LDU <= '0';
+		EzRA <= "0000"; EzRB <= "0000"; EzRC <= "0000";
+		AddrWZ <= '0'; WZAdd <= '0'; WZToReg <= '0'; EzBusB <= "00";
+		BusBMode <= '0'; IntVec <= '0'; JumpV <= '0';
+		StkSelA <= "00"; StkSelI <= "00"; LDMode <= '0'; JumpM <= '0';
 
 		case ISet is
 		when "00" =>
@@ -2424,6 +2500,7 @@ begin
 			if ILm = '1' then o := 1; else o := 0; end if;
 			if Lm = '1' then lw := 1; else lw := 0; end if;
 			dc := mc - 4 - o;
+			if ADLm = '1' then adlv := 1; else adlv := 0; end if;
 			case ISet is
 			when "00" =>
 				if XY_State = "00" then
@@ -2437,6 +2514,37 @@ begin
 					when others => null;
 					end case;
 				end if;
+				-- DD / FD: LD rr,(IX+d) and LD (IX+d),rr (the d fetch: M1 aXY -> M14, M15 -> M2)
+				done := false;
+				if XY_State /= "00" then
+					case IRB is
+					when "00000111"|"00010111"|"00100111"|"00110001"|"00110111" =>
+						-- LD BC / DE / HL,(IX+d); 31: DD -> IY, FD -> IX; 37: DD -> IX, FD -> IY
+						-- (M14 / M15 = the d fetch of the core: only the Z80 operations off)
+						done := true;
+						if mc < 14 then ez_clear; else ez_clear_ops; end if;
+						MCycles <= std_logic_vector(to_unsigned(3 + lw, 4));
+						if IR = "00110001" then EzRA <= "1" & not XY_State(1) & "11";
+						elsif IR = "00110111" then EzRA <= "1" & XY_State(1) & "11";
+						else EzRA <= "10" & IR(5 downto 4); end if;
+						if mc = 1 then Set_Addr_To <= aXY; end if;
+						dc := mc - 2;
+						ez_read_word(IR(5 downto 4), false);
+					when "00001111"|"00011111"|"00101111"|"00111110"|"00111111" =>
+						-- LD (IX+d),BC / DE / HL; 3E: DD -> IY, FD -> IX; 3F: DD -> IX, FD -> IY
+						done := true;
+						if mc < 14 then ez_clear; else ez_clear_ops; end if;
+						MCycles <= std_logic_vector(to_unsigned(3 + lw, 4));
+						if IR = "00111110" then EzRB <= "1" & not XY_State(1) & "11";
+						elsif IR = "00111111" then EzRB <= "1" & XY_State(1) & "11";
+						else EzRB <= "10" & IR(5 downto 4); end if;
+						if mc = 1 then Set_Addr_To <= aXY; end if;
+						if mc = 15 then dc := -1; else dc := mc - 2; end if;
+						if mc /= 14 then ez_write_word(IR(5 downto 4), false); end if;
+					when others => null;
+					end case;
+				end if;
+				if not done then
 				case IRB is
 				when "00000001"|"00010001"|"00100001"|"00110001" =>
 					-- LD dd,nn: with IL the third byte to the upper byte; with L only, the upper byte = 0
@@ -2564,21 +2672,26 @@ begin
 						end if;
 					end if;
 				when "11001001" =>
-					-- RET with L: 3 bytes
-					if lw = 1 then
+					-- RET: after a suffix mixed, with L 3 bytes
+					if Sfxm = '1' then
+						ez_clear;
+						ez_pop_mixed;
+					elsif lw = 1 then
 						ez_clear;
 						MCycles <= "0100";
 						ez_pop_pc;
 					end if;
 				when "11000000"|"11001000"|"11010000"|"11011000"|"11100000"|"11101000"|"11110000"|"11111000" =>
-					-- RET cc with L
-					if lw = 1 then
+					-- RET cc: after a suffix mixed, with L 3 bytes
+					if Sfxm = '1' or lw = 1 then
 						ez_clear;
-						if is_cc_true(F, to_bitvector(IR(5 downto 3))) then
+						if not is_cc_true(F, to_bitvector(IR(5 downto 3))) then
+							MCycles <= "0001";
+						elsif Sfxm = '1' then
+							ez_pop_mixed;
+						else
 							MCycles <= "0100";
 							ez_pop_pc;
-						else
-							MCycles <= "0001";
 						end if;
 					end if;
 				when "11000111"|"11001111"|"11010111"|"11011111"|"11100111"|"11101111"|"11110111"|"11111111" =>
@@ -2637,8 +2750,105 @@ begin
 					end if;
 				when others => null;
 				end case;
+				end if;  -- not done
 			when "10" =>
 				case IRB is
+				when "01000101"|"01001101" =>
+					-- RETN / RETI: after a suffix mixed, with L 3 bytes; IFF1 <= IFF2 stays (I_RETN)
+					if Sfxm = '1' then
+						ez_clear;
+						I_RETN <= '1';
+						ez_pop_mixed;
+					elsif lw = 1 then
+						ez_clear;
+						I_RETN <= '1';
+						MCycles <= "0100";
+						ez_pop_pc;
+					end if;
+				when "00000010"|"00010010"|"00100010"|"00110010"|"00000011"|"00010011"|"00100011"|"00110011"|"01010100"|"01010101" =>
+					-- LEA rr,IX+d / LEA rr,IY+d / LEA IX,IY+d (54) / LEA IY,IX+d (55)
+					ez_clear;
+					MCycles <= "0011";
+					if IR = "01010100" then EzRC <= "1111";          -- base IY
+					elsif IR = "01010101" then EzRC <= "1011";       -- base IX
+					else EzRC <= "1" & IR(0) & "11"; end if;         -- x2: IX, x3: IY
+					if IR = "01010100" then EzRA <= "1011";          -- target IX
+					elsif IR = "01010101" then EzRA <= "1111";       -- target IY
+					elsif IR(5 downto 4) = "11" then EzRA <= "1" & IR(0) & "11";
+					else EzRA <= "10" & IR(5 downto 4); end if;
+					if mc = 2 then Inc_PC <= '1'; WZAdd <= '1'; end if;
+					if mc = 3 then WZToReg <= '1'; end if;
+				when "01100101"|"01100110" =>
+					-- PEA IX+d (65) / PEA IY+d (66): push base + d
+					ez_clear;
+					MCycles <= std_logic_vector(to_unsigned(3 + 2 + lw, 4));
+					EzRC <= "1" & IR(1) & "11";
+					if mc = 2 then Inc_PC <= '1'; WZAdd <= '1'; end if;
+					if mc >= 3 and mc - 3 < 2 + lw then
+						IncDec_16 <= "1111";
+						Set_Addr_To <= aSP;
+						if mc - 3 = 1 + lw then EzBusB <= "01";
+						elsif lw = 1 and mc = 3 then EzBusB <= "11";
+						else EzBusB <= "10"; end if;
+					end if;
+					if mc >= 4 then Write <= '1'; end if;
+				when "00000111"|"00010111"|"00100111"|"00110111"|"00110001" =>
+					-- LD rr,(HL): 07 BC, 17 DE, 27 HL, 37 IX, 31 IY
+					ez_clear;
+					MCycles <= std_logic_vector(to_unsigned(3 + lw, 4));
+					if IR = "00110111" then EzRA <= "1011";
+					elsif IR = "00110001" then EzRA <= "1111";
+					else EzRA <= "10" & IR(5 downto 4); end if;
+					if mc = 1 then Set_Addr_To <= aXY; AddrWZ <= '1'; end if;
+					dc := mc - 2;
+					ez_read_word(IR(5 downto 4), false);
+				when "00001111"|"00011111"|"00101111"|"00111111"|"00111110" =>
+					-- LD (HL),rr: 0F BC, 1F DE, 2F HL, 3F IX, 3E IY
+					ez_clear;
+					MCycles <= std_logic_vector(to_unsigned(3 + lw, 4));
+					if IR = "00111111" then EzRB <= "1011";
+					elsif IR = "00111110" then EzRB <= "1111";
+					else EzRB <= "10" & IR(5 downto 4); end if;
+					if mc = 1 then Set_Addr_To <= aXY; AddrWZ <= '1'; end if;
+					dc := mc - 2;
+					ez_write_word(IR(5 downto 4), false);
+				when "01001100"|"01011100"|"01101100" =>
+					-- MLT rr (BC / DE / HL): rr <= low * high
+					ez_clear;
+					MCycles <= "0010";
+					Set_BusA_To <= "0" & IR(5 downto 4) & "0";
+					if mc = 2 then EzOp <= "0101"; end if;
+				when "00000100"|"00001100"|"00010100"|"00011100"|"00100100"|"00101100"|"00111100" =>
+					-- TST A,r: AND without the store
+					ez_clear;
+					MCycles <= "0001";
+					Set_BusA_To <= "0111";
+					Set_BusB_To(2 downto 0) <= IR(5 downto 3);
+					Set_BusB_To(3) <= '0';
+					ALU_Op <= "0100";
+					Save_ALU <= '1';
+				when "01100100" =>
+					-- TST A,n
+					ez_clear;
+					MCycles <= "0010";
+					if mc = 2 then
+						Inc_PC <= '1';
+						Set_BusA_To <= "0111";
+						Set_BusB_To <= "0110";
+						ALU_Op <= "0100";
+						Save_ALU <= '1';
+					end if;
+				when "00110100" =>
+					-- TST A,(HL)
+					ez_clear;
+					MCycles <= "0010";
+					if mc = 1 then Set_Addr_To <= aXY; end if;
+					if mc = 2 then
+						Set_BusA_To <= "0111";
+						Set_BusB_To <= "0110";
+						ALU_Op <= "0100";
+						Save_ALU <= '1';
+					end if;
 				when "01000010"|"01010010"|"01100010"|"01110010" =>
 					-- SBC HL,ss: with L the upper byte in M4
 					if lw = 1 then
@@ -2721,6 +2931,35 @@ begin
 				end case;
 			when others => null;
 			end case;
+		end if;
+
+		-- karabas: eZ80 vectored interrupt (eZ80F92 as the Agon emulator): the vector came on the bus
+		-- in the acknowledge M1 (WZ(7:0)); with MADL: PC (3 bytes in ADL, 2 in Z80 mode) and the mode
+		-- byte (MADL << 1 | ADL) on SPL; without: PC as a CALL in the current mode. Then the 16-bit
+		-- handler address from the table at 00:I:vector, ADL <= ADL or MADL.
+		if EZ80 /= 0 and ISet = "00" and IRB = "00000000" and IntCycle = '1' and NMICycle = '0' then
+			ez_clear;
+			if MADLm = '1' then np := 3 + adlv; else np := 2 + adlv; end if;  -- the bytes to push
+			MCycles <= std_logic_vector(to_unsigned(1 + np + 2, 4));
+			k2 := mc - 1;   -- 0 = the cycle setting up the first byte
+			if k2 >= 0 and k2 < np then
+				IncDec_16 <= "1111";
+				Set_Addr_To <= aSP;
+				if MADLm = '1' and k2 = np - 1 then
+					BusBMode <= '1';                          -- the mode byte last
+				elsif adlv = 1 and k2 = 0 then
+					Set_BusB_To <= "1101"; BusBU <= '1';      -- PCU
+				elsif (adlv = 1 and k2 = 1) or (adlv = 0 and k2 = 0) then
+					Set_BusB_To <= "1101";                    -- PCH
+				else
+					Set_BusB_To <= "1100";                    -- PCL
+				end if;
+			end if;
+			if k2 >= 1 and k2 <= np then Write <= '1'; end if;
+			if k2 = np then IntVec <= '1'; end if;           -- the table address at the end
+			if k2 = np + 1 then Inc_PC <= '1'; LDZ <= '1'; end if;
+			if k2 = np + 2 then JumpV <= '1'; end if;
+			if mc = 1 then TStates <= "101"; end if;
 		end if;
 
 	end process;
