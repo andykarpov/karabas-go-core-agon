@@ -8,6 +8,7 @@
 // usage: iss <fw.bin> [--org A] [--max Minstr] [--ipu N] [--in file] [--in-at us] [--baud N] [--tx file]
 //            [--icache B] [--dcache B] [--prof file: pc + ra every 256 instr]
 //            [--shot us prefix: ask the firmware for a screenshot at that time -> prefix<N>.ppm; repeatable]
+//            [--shot-poll file.ppm: with --stop-poll, a screenshot at that answer, then the exit]
 //            [--stop-poll TAG: at the VDP answer 80 01 TAG print "DONE" with the counters since --in-at,
 //             then ask the firmware to report (stacks) and exit]
 // audio FIFO (MMIO_AUDIO): 512 samples drained at 16384 Hz, underruns counted
@@ -55,6 +56,8 @@ int main(int argc, char **argv) {
     std::vector<uint64_t> shots;
     const char *shot_prefix = "shot";
     int nshot = 0;
+    const char *shot_poll = nullptr;   // --shot-poll file.ppm: at the --stop-poll answer a screenshot, then exit
+    bool sp_pend = false;
     int stop_tag = -1;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--max")) max_instr = strtoull(argv[++i], 0, 10) * 1000000ull;
@@ -68,6 +71,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--prof")) prof = fopen(argv[++i], "w");
         else if (!strcmp(argv[i], "--stop-poll")) stop_tag = strtol(argv[++i], 0, 16);
         else if (!strcmp(argv[i], "--shot")) { shots.push_back(strtoull(argv[++i], 0, 10)); shot_prefix = argv[++i]; }
+        else if (!strcmp(argv[i], "--shot-poll")) shot_poll = argv[++i];
         else if (!strcmp(argv[i], "--in")) {
             FILE *f = fopen(argv[++i], "rb");
             if (!f) { perror(argv[i]); return 2; }
@@ -124,7 +128,7 @@ int main(int argc, char **argv) {
             case 0x54: {
                 uint32_t k = 0;
                 for (uint64_t t : shots) if (t <= ninstr / ipu) k++;
-                return k > (uint32_t)nshot ? 1u : 0u;
+                return (k > (uint32_t)nshot || sp_pend) ? 1u : 0u;
             }
             case 0x40: case 0x48: {
                 // byte k of the input is there from in_at + k * us_per_byte
@@ -160,14 +164,15 @@ int main(int argc, char **argv) {
                            (unsigned long long)(tot.dm[0] - z.dm[0]), (unsigned long long)(tot.dm[1] - z.dm[1]),
                            (unsigned long long)(tot.st[0] - z.st[0]), (unsigned long long)(tot.st[1] - z.st[1]),
                            (unsigned long long)aud_under);
-                    want_exit = true;
+                    if (shot_poll) sp_pend = true; else want_exit = true;
                 }
                 tx_state = (b == 0x80) ? 1 : (tx_state == 1 && b == 0x01) ? 2 : 0;
             }
             else if (o == 0x54) {
                 uint32_t w = v >> 16, h = v & 0xffff;
                 char name[512];
-                snprintf(name, sizeof name, "%s%d.ppm", shot_prefix, nshot++);
+                if (sp_pend) snprintf(name, sizeof name, "%s", shot_poll);
+                else snprintf(name, sizeof name, "%s%d.ppm", shot_prefix, nshot++);
                 if (w && h && w * h * 3 <= (8u << 20)) {
                     FILE *pf = fopen(name, "wb");
                     fprintf(pf, "P6\n%u %u\n255\n", w, h);
@@ -175,6 +180,7 @@ int main(int argc, char **argv) {
                     fclose(pf);
                 }
                 printf("SHOT %s %ux%u at %llu us\n", name, w, h, (unsigned long long)(ninstr / ipu));
+                if (sp_pend) { sp_pend = false; want_exit = true; }
             }
             else if (o == 0x50) {
                 tot.instr = ninstr;

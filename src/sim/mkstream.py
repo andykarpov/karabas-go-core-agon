@@ -3,7 +3,7 @@
 
 Each stream = the boot handshake (VDU 23,0,&80: general poll) + a workload + a general poll with a
 tag, so the VDP reply "80 01 <tag>" in the ISS TX log marks the end of the work.
-usage: mkstream.py <name> <out.bin>   names: see WORK
+usage: mkstream.py [--nocursor] <name> <out.bin>   names: see WORK
 """
 import struct
 import sys
@@ -119,8 +119,12 @@ WORK = {
 
 
 def main():
-    name, out = sys.argv[1], sys.argv[2]
-    data = gp(0x55) + WORK[name]() + gp(0xaa)
+    # --nocursor: the text cursor off first (VDU 23,1,0): its blink depends on time, so screenshots
+    # of runs with another timing (the RTL against the ISS) differ only there
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    name, out = args[0], args[1]
+    pre = vdu(23, 1, 0, 0, 0, 0, 0, 0, 0, 0) if '--nocursor' in sys.argv else b''
+    data = gp(0x55) + pre + WORK[name]() + gp(0xaa)
     with open(out, 'wb') as f:
         f.write(data)
 
