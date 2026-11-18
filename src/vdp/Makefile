@@ -35,6 +35,20 @@ all: $(B)/vdp.bin
 $(B)/gl/%.o: $(GL)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+# karabas: our patches to vdp-gl, one per file (patches/<path, / as _>.patch): the patched copy in
+# $(B)/pgl/ is built instead of the upstream file
+GL_PATCHED := dispdrivers/vga2controller.cpp dispdrivers/vga4controller.cpp dispdrivers/vga8controller.cpp \
+              dispdrivers/vga16controller.cpp dispdrivers/vga64controller.cpp
+define patched
+$(B)/pgl/$(1): $(GL)/$(1) patches/$(subst /,_,$(1)).patch
+	@mkdir -p $$(dir $$@)
+	patch -s -o $$@ $$< patches/$(subst /,_,$(1)).patch
+$(B)/gl/$(1:.cpp=.o): $(B)/pgl/$(1)
+	@mkdir -p $$(dir $$@)
+	$$(CROSS)g++ $$(CXXFLAGS) -c $$< -o $$@
+endef
+$(foreach f,$(GL_PATCHED),$(eval $(call patched,$(f))))
+
 $(B)/%.o: %.cpp mmio.h coop.h compat/mutex compat/thread Makefile
 	@mkdir -p $(B)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
