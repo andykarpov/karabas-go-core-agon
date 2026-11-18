@@ -122,6 +122,11 @@ entity T80_MCode is
       StkSelI     : out std_logic_vector(1 downto 0);  -- SP inc / dec stack: the same codes
       LDMode      : out std_logic;         -- at T3: ModeB <= DI(0)
       JumpM       : out std_logic;         -- at T_Res: the mixed-mode return jump (see T80.vhd)
+      EzFM        : out std_logic_vector(1 downto 0);  -- the ALU flags of Save_ALU: 00 all, 01 Z only, 10 none
+      EzBF        : out std_logic_vector(1 downto 0);  -- eZ80 block I/O flags at T2: 01 N, 10 N + Z = BC /= 0, 11 N, P = C = 0
+      EzBTR       : out std_logic;         -- eZ80 block I/O: repeat (PC back) unless Z, at T_Res
+      TrapRw      : out std_logic_vector(1 downto 0);  -- invalid opcode: PC <= PC - TrapRw at T3
+      TrapJ       : out std_logic;         -- at T_Res: PC <= 0, ADL <= ADL or MADL (the TRAP)
       ISet        : in std_logic_vector(1 downto 0);
       MCycle      : in std_logic_vector(3 downto 0);
       F           : in std_logic_vector(7 downto 0);
@@ -236,6 +241,9 @@ begin
 		variable k2    : integer;
 		variable adlv  : integer;   -- 1 in ADL mode
 		variable done  : boolean;   -- a DD / FD eZ80 instruction took the cycle
+		variable trap  : boolean;   -- an invalid opcode (TRAP)
+		variable trw   : integer;   -- TRAP: PC back by 1 or 2
+		variable tfirst: integer;   -- TRAP: the cycle of the rewind (1, DD / FD CB: 15)
 		-- clear the per-cycle outputs the Z80 code of an opcode set, before an eZ80 sequence
 		procedure ez_clear is
 		begin
@@ -358,6 +366,48 @@ begin
 			end if;
 		end procedure;
 
+		-- CALL / CALL cc / RST after a suffix (CEmu cpu_call / cpu_rst, mixed): in ADL the upper byte
+		-- and (CALL without IL, RST) the mode byte on SPL first, then high / low on the stack of the
+		-- call (CALL: IL or (L and not ADL), RST: L), then (CALL with IL, or Z80 mode) the mode byte
+		-- on SPL. Stack codes: 01 SPL, 11 SPS.
+		procedure ez_push_mixed(p0 : integer; rst : boolean) is
+			variable nb, k, b : integer;   -- b: 0 PCU, 1 PCH, 2 PCL, 3 the mode byte
+			variable stk      : std_logic_vector(1 downto 0);
+			variable sel      : std_logic_vector(1 downto 0);
+		begin
+			if adlv = 1 then nb := 4; else nb := 3; end if;
+			if (rst and Lm = '1') or (not rst and (ILm = '1' or (Lm = '1' and ADLm = '0'))) then
+				stk := "01";
+			else
+				stk := "11";
+			end if;
+			k := mc - p0;
+			if k >= 0 and k < nb then
+				if adlv = 1 then
+					if rst or ILm = '0' then
+						case k is when 0 => b := 0; when 1 => b := 3; when 2 => b := 1; when others => b := 2; end case;
+					else
+						case k is when 0 => b := 0; when 1 => b := 1; when 2 => b := 2; when others => b := 3; end case;
+					end if;
+				else
+					case k is when 0 => b := 1; when 1 => b := 2; when others => b := 3; end case;
+				end if;
+				if b = 0 or b = 3 then sel := "01"; else sel := stk; end if;
+				IncDec_16 <= "1111";
+				Set_Addr_To <= aSP;
+				StkSelA <= sel; StkSelI <= sel;
+				case b is
+				when 0 => Set_BusB_To <= "1101"; BusBU <= '1';
+				when 1 => Set_BusB_To <= "1101";
+				when 2 => Set_BusB_To <= "1100";
+				when others => BusBMode <= '1';
+				end case;
+			end if;
+			if k >= 1 and k <= nb then Write <= '1'; end if;
+			if k = nb then
+				if rst then RstP <= '1'; else Call <= '1'; end if;
+			end if;
+		end procedure;
 		-- RET / RET cc / RETI / RETN after a suffix (CEmu cpu_return): the mode byte from SPL, PC low /
 		-- high from the stack of ADL, the upper byte from SPL if the mode byte says ADL; ADL <= mode
 		procedure ez_pop_mixed is
@@ -468,6 +518,7 @@ begin
 		AddrWZ <= '0'; WZAdd <= '0'; WZToReg <= '0'; EzBusB <= "00";
 		BusBMode <= '0'; IntVec <= '0'; JumpV <= '0';
 		StkSelA <= "00"; StkSelI <= "00"; LDMode <= '0'; JumpM <= '0';
+		EzFM <= "00"; EzBF <= "00"; EzBTR <= '0'; TrapRw <= "00"; TrapJ <= '0';
 
 		case ISet is
 		when "00" =>
@@ -2656,27 +2707,29 @@ begin
 					if dc = -1 then Set_BusB_To <= "0111"; end if;
 					if dc = 0 then Write <= '1'; end if;
 				when "11001101" =>
-					-- CALL nn: nn 3 bytes with IL, the return address 3 bytes with L (not mixed)
-					if o = 1 or lw = 1 then
+					-- CALL nn: nn 3 bytes with IL; the return address 3 bytes with L, mixed after a suffix
+					if o = 1 or lw = 1 or Sfxm = '1' then
 						ez_clear;
 						MCycles <= std_logic_vector(to_unsigned(3 + o + 2 + lw, 4));
+						if Sfxm = '1' then MCycles <= std_logic_vector(to_unsigned(3 + o + 3 + adlv, 4)); end if;
 						if mc = 2 then Inc_PC <= '1'; LDZ <= '1'; end if;
 						if mc = 3 then Inc_PC <= '1'; LDW <= '1'; end if;
 						if mc = 4 and o = 1 then Inc_PC <= '1'; LDU <= '1'; end if;
 						if mc = 3 + o then TStates <= "100"; end if;
-						ez_push_pc(3 + o, false);
+						if Sfxm = '1' then ez_push_mixed(3 + o, false); else ez_push_pc(3 + o, false); end if;
 					end if;
 				when "11000100"|"11001100"|"11010100"|"11011100"|"11100100"|"11101100"|"11110100"|"11111100" =>
 					-- CALL cc,nn
-					if o = 1 or lw = 1 then
+					if o = 1 or lw = 1 or Sfxm = '1' then
 						ez_clear;
 						MCycles <= std_logic_vector(to_unsigned(3 + o + 2 + lw, 4));
+						if Sfxm = '1' then MCycles <= std_logic_vector(to_unsigned(3 + o + 3 + adlv, 4)); end if;
 						if mc = 2 then Inc_PC <= '1'; LDZ <= '1'; end if;
 						if mc = 3 then Inc_PC <= '1'; LDW <= '1'; end if;
 						if mc = 4 and o = 1 then Inc_PC <= '1'; LDU <= '1'; end if;
 						if is_cc_true(F, to_bitvector(IR(5 downto 3))) then
 							if mc = 3 + o then TStates <= "100"; end if;
-							ez_push_pc(3 + o, false);
+							if Sfxm = '1' then ez_push_mixed(3 + o, false); else ez_push_pc(3 + o, false); end if;
 						else
 							MCycles <= std_logic_vector(to_unsigned(3 + o, 4));
 						end if;
@@ -2705,8 +2758,13 @@ begin
 						end if;
 					end if;
 				when "11000111"|"11001111"|"11010111"|"11011111"|"11100111"|"11101111"|"11110111"|"11111111" =>
-					-- RST p with L: 3 bytes
-					if lw = 1 then
+					-- RST p with L: 3 bytes; mixed after a suffix
+					if Sfxm = '1' then
+						ez_clear;
+						MCycles <= std_logic_vector(to_unsigned(1 + 3 + adlv, 4));
+						if mc = 1 then TStates <= "101"; end if;
+						ez_push_mixed(1, true);
+					elsif lw = 1 then
 						ez_clear;
 						MCycles <= "0100";
 						if mc = 1 then TStates <= "101"; end if;
@@ -2822,6 +2880,136 @@ begin
 					if mc = 1 then Set_Addr_To <= aXY; AddrWZ <= '1'; end if;
 					dc := mc - 2;
 					ez_write_word(IR(5 downto 4), false);
+				when "10000010"|"10001010"|"10010010"|"10011010"|"10100010"|"10101010"|"10110010"|"10111010"
+				    |"11000010"|"11001010"|"10000100"|"10001100"|"10010100"|"10011100" =>
+					-- eZ80 block input (CEmu cpu_execute_bli): INIM / INDM (82 8A), INIMR / INDMR (92 9A),
+					-- INI / IND / INIR / INDR (A2 AA B2 BA: port BC before B--), INIRX / INDRX (C2 CA: port
+					-- DE, BC--), INI2 / IND2 (84 8C: port BC, C +-), INI2R / IND2R (94 9C: port DE, DE +-,
+					-- BC--). M1 port, counter; M2 I/O read; M3 (HL) write, DE / C; M4 HL, flags, repeat.
+					ez_clear;
+					MCycles <= "0100";
+					if IR(4) = '1' or IR(6) = '1' then MCycles <= "0101"; end if;  -- M5: PC back (BTR_r)
+					if mc = 5 then NoRead <= '1'; end if;
+					if mc = 1 then
+						TStates <= "101";
+						Set_Addr_To <= aBC;
+						if IR(7 downto 4) = "1000" or IR(7 downto 4) = "1001" then
+							if IR(2) = '0' then IOA0 <= '1'; end if;     -- INIM / INIMR: port 00:C
+						end if;
+						if IR(7 downto 6) = "11" or IR = "10010100" or IR = "10011100" then
+							Set_Addr_To <= aDE;                           -- INIRX, INI2R: port DE
+							IncDec_16 <= "1100";                          -- BC--
+						else
+							Set_BusA_To <= "0000"; Set_BusB_To <= "1010"; -- B--
+							ALU_Op <= "0010"; Read_To_Reg <= '1'; Save_ALU <= '1';
+							if IR = "10000010" or IR = "10001010" then EzFM <= "00"; else EzFM <= "01"; end if;
+						end if;
+					end if;
+					if mc = 2 then
+						IORQ <= '1';
+						Set_Addr_To <= aXY;
+						Set_BusB_To <= "0110";
+					end if;
+					if mc = 3 then
+						Write <= '1';
+						if IR = "10010100" or IR = "10011100" then
+							IncDec_16 <= IR(3) & "101";                   -- DE +- 1
+						elsif IR(7 downto 5) = "100" then
+							Set_BusA_To <= "0001"; Set_BusB_To <= "1010"; -- C +- 1
+							ALU_Op <= "00" & IR(3) & "0"; Read_To_Reg <= '1'; Save_ALU <= '1'; EzFM <= "10";
+						end if;
+					end if;
+					if mc = 4 then
+						NoRead <= '1';
+						IncDec_16 <= IR(3) & "110";                       -- HL +- 1
+						if IR = "10000010" or IR = "10001010" then EzBF <= "11";
+						elsif IR(7 downto 6) = "11" or IR = "10010100" or IR = "10011100" then EzBF <= "10";
+						else EzBF <= "01"; end if;
+						if IR(4) = '1' or IR(6) = '1' then EzBTR <= '1'; end if;
+					end if;
+				when "10000011"|"10001011"|"10010011"|"10011011"|"10100011"|"10101011"|"10110011"|"10111011"
+				    |"11000011"|"11001011"|"10100100"|"10101100"|"10110100"|"10111100" =>
+					-- eZ80 block output: OTIM / OTDM (83 8B), OTIMR / OTDMR (93 9B), OUTI / OUTD / OTIR /
+					-- OTDR (A3 AB B3 BB: port BC before B--), OTIRX / OTDRX (C3 CB: port DE, BC--), OUTI2 /
+					-- OUTD2 (A4 AC: port BC, C +-), OTI2R / OTD2R (B4 BC: port DE, DE +-, BC--).
+					-- M1 (HL), BC--; M2 read, port; M3 I/O write, B-- / DE; M4 HL, C, flags, repeat.
+					ez_clear;
+					MCycles <= "0100";
+					if IR(4) = '1' or IR(6) = '1' then MCycles <= "0101"; end if;  -- M5: PC back (BTR_r)
+					if mc = 5 then NoRead <= '1'; end if;
+					if mc = 1 then
+						TStates <= "101";
+						Set_Addr_To <= aXY;
+						if IR(7 downto 6) = "11" or IR = "10110100" or IR = "10111100" then
+							IncDec_16 <= "1100";                          -- BC--
+						end if;
+					end if;
+					if mc = 2 then
+						Set_BusB_To <= "0110";
+						if IR(7 downto 6) = "11" or IR = "10110100" or IR = "10111100" then
+							Set_Addr_To <= aDE;
+						else
+							Set_Addr_To <= aBC;
+							if IR(7 downto 5) = "100" then IOA0 <= '1'; end if;   -- OTIM / OTIMR: port 00:C
+						end if;
+					end if;
+					if mc = 3 then
+						Write <= '1';
+						IORQ <= '1';
+						if IR = "10110100" or IR = "10111100" then
+							IncDec_16 <= IR(3) & "101";                   -- DE +- 1
+						elsif IR(7 downto 6) /= "11" then
+							Set_BusA_To <= "0000"; Set_BusB_To <= "1010"; -- B--
+							ALU_Op <= "0010"; Read_To_Reg <= '1'; Save_ALU <= '1';
+							if IR(7 downto 5) = "100" then EzFM <= "00"; else EzFM <= "01"; end if;
+						end if;
+					end if;
+					if mc = 4 then
+						NoRead <= '1';
+						IncDec_16 <= IR(3) & "110";                       -- HL +- 1
+						if IR(7 downto 5) = "100" or IR = "10100100" or IR = "10101100" then
+							Set_BusA_To <= "0001"; Set_BusB_To <= "1010"; -- C +- 1
+							ALU_Op <= "00" & IR(3) & "0"; Read_To_Reg <= '1'; Save_ALU <= '1'; EzFM <= "10";
+						end if;
+						if IR(7 downto 5) = "100" then EzBF <= "11";
+						elsif IR(7 downto 6) = "11" or IR = "10110100" or IR = "10111100" then EzBF <= "10";
+						else EzBF <= "01"; end if;
+						if IR(4) = '1' or IR(6) = '1' then EzBTR <= '1'; end if;
+					end if;
+				when "01110110" =>
+					-- SLP: as HALT (CEmu cpu_halt; the F92 stops its clock until an interrupt)
+					ez_clear;
+					Halt <= '1';
+				when "01111100" =>
+					-- MLT SP
+					ez_clear;
+					MCycles <= "0010";
+					if mc = 2 then EzOp <= "0110"; end if;
+				when "01110100" =>
+					-- TSTIO n: (port 00:C) AND n, flags as AND
+					ez_clear;
+					MCycles <= "0011";
+					if mc = 2 then Inc_PC <= '1'; LDZ <= '1'; Set_Addr_To <= aBC; IOA0 <= '1'; end if;
+					if mc = 3 then
+						IORQ <= '1';
+						Set_BusA_To <= "0110";
+						EzBusB <= "01";
+						ALU_Op <= "0100";
+						Save_ALU <= '1';
+					end if;
+				when "11000111" =>
+					-- LD I,HL (HL on RegBusC from M2)
+					ez_clear;
+					MCycles <= "0010";
+					EzRC <= "1010";
+					if mc = 2 then EzOp <= "0111"; end if;
+				when "11010111" =>
+					-- LD HL,I: HL <= MBASE:I (by L)
+					ez_clear;
+					MCycles <= "0010";
+					EzRA <= "1010";
+					if mc = 1 then EzOp <= "1000"; end if;
+					if mc = 2 then WZToReg <= '1'; end if;
 				when "01001100"|"01011100"|"01101100" =>
 					-- MLT rr (BC / DE / HL): rr <= low * high
 					ez_clear;
@@ -2945,6 +3133,105 @@ begin
 				end case;
 			when others => null;
 			end case;
+		end if;
+
+		-- karabas: eZ80 TRAP on an invalid opcode (the sets of CEmu cpu.c, the same in every mode and
+		-- with every suffix): PC back to the opcode (DD / FD CB d op: to d), then as an interrupt to
+		-- 000000: with MADL mixed (ADL: PCU, mode, PCH, PCL on SPL; Z80 mode: PCH, PCL on SPS, mode on
+		-- SPL), without: PC as a CALL in ADL; the new mode ADL or MADL (CEmu cpu_trap_rewind)
+		trap := false; trw := 1; tfirst := 1;
+		if EZ80 /= 0 and NMICycle = '1' then
+			-- NMI (CEmu cpu_interrupt(0x66), untested: the Agon has no NMI source): the push of the
+			-- TRAP without the PC rewind, to 000066
+			trap := true; trw := 0;
+		elsif EZ80 /= 0 and IntCycle = '0' and mc /= 14 then
+			if ISet = "00" and XY_State /= "00" then
+				case IR is
+				when "00000000"|"00000001"|"00000010"|"00000011"|"00000100"|"00000101"|"00000110"|"00001000"
+				|"00001010"|"00001011"|"00001100"|"00001101"|"00001110"|"00010000"|"00010001"|"00010010"
+				|"00010011"|"00010100"|"00010101"|"00010110"|"00011000"|"00011010"|"00011011"|"00011100"
+				|"00011101"|"00011110"|"00100000"|"00101000"|"00110000"|"00110010"|"00110011"|"00111000"
+				|"00111010"|"00111011"|"00111100"|"00111101"|"01000000"|"01000001"|"01000010"|"01000011"
+				|"01000111"|"01001000"|"01001001"|"01001010"|"01001011"|"01001111"|"01010000"|"01010001"
+				|"01010010"|"01010011"|"01010111"|"01011000"|"01011001"|"01011010"|"01011011"|"01011111"
+				|"01111000"|"01111001"|"01111010"|"01111011"|"01111111"|"10000000"|"10000001"|"10000010"
+				|"10000011"|"10000111"|"10001000"|"10001001"|"10001010"|"10001011"|"10001111"|"10010000"
+				|"10010001"|"10010010"|"10010011"|"10010111"|"10011000"|"10011001"|"10011010"|"10011011"
+				|"10011111"|"10100000"|"10100001"|"10100010"|"10100011"|"10100111"|"10101000"|"10101001"
+				|"10101010"|"10101011"|"10101111"|"10110000"|"10110001"|"10110010"|"10110011"|"10110111"
+				|"10111000"|"10111001"|"10111010"|"10111011"|"10111111"|"11000000"|"11000001"|"11000010"
+				|"11000011"|"11000100"|"11000101"|"11000110"|"11000111"|"11001000"|"11001001"|"11001010"
+				|"11001100"|"11001101"|"11001110"|"11001111"|"11010000"|"11010001"|"11010010"|"11010011"
+				|"11010100"|"11010101"|"11010110"|"11010111"|"11011000"|"11011001"|"11011010"|"11011011"
+				|"11011100"|"11011110"|"11011111"|"11100000"|"11100010"|"11100100"|"11100110"|"11100111"
+				|"11101000"|"11101010"|"11101011"|"11101100"|"11101110"|"11101111"|"11110000"|"11110001"
+				|"11110010"|"11110011"|"11110100"|"11110101"|"11110110"|"11110111"|"11111000"|"11111010"
+				|"11111011"|"11111100"|"11111110"|"11111111" => trap := true;
+				when others => null;
+				end case;
+			elsif ISet = "01" and XY_State = "00" then
+				if IR(7 downto 3) = "00110" then trap := true; end if;                -- SLL
+			elsif ISet = "01" then
+				if IR(2 downto 0) /= "110" or IR = "00110110" then trap := true; trw := 2; tfirst := 15; end if;
+			elsif ISet = "10" then
+				case IR is
+				when "00000101"|"00000110"|"00001010"|"00001011"|"00001101"|"00001110"|"00010101"|"00010110"
+				|"00011010"|"00011011"|"00011101"|"00011110"|"00100101"|"00100110"|"00101010"|"00101011"
+				|"00101101"|"00101110"|"00110101"|"00110110"|"00111010"|"00111011"|"00111101"|"01001110"
+				|"01011101"|"01110001"|"01110101"|"01110111"|"01111111"|"10000000"|"10000001"|"10000101"
+				|"10000110"|"10000111"|"10001000"|"10001001"|"10001101"|"10001110"|"10001111"|"10010000"
+				|"10010001"|"10010101"|"10010110"|"10010111"|"10011000"|"10011001"|"10011101"|"10011110"
+				|"10011111"|"10100101"|"10100110"|"10100111"|"10101101"|"10101110"|"10101111"|"10110101"
+				|"10110110"|"10110111"|"10111101"|"10111110"|"10111111"|"11000000"|"11000001"|"11000100"
+				|"11000101"|"11000110"|"11001000"|"11001001"|"11001100"|"11001101"|"11001110"|"11001111"
+				|"11010000"|"11010001"|"11010010"|"11010011"|"11010100"|"11010101"|"11010110"|"11011000"
+				|"11011001"|"11011010"|"11011011"|"11011100"|"11011101"|"11011110"|"11011111"|"11100000"
+				|"11100001"|"11100010"|"11100011"|"11100100"|"11100101"|"11100110"|"11100111"|"11101000"
+				|"11101001"|"11101010"|"11101011"|"11101100"|"11101101"|"11101110"|"11101111"|"11110000"
+				|"11110001"|"11110010"|"11110011"|"11110100"|"11110101"|"11110110"|"11110111"|"11111000"
+				|"11111001"|"11111010"|"11111011"|"11111100"|"11111101"|"11111110"|"11111111" => trap := true;
+				when others => null;
+				end case;
+			end if;
+		end if;
+		if trap then
+			if MADLm = '1' then np := 3 + adlv; else np := 2 + adlv; end if;
+			MCycles <= std_logic_vector(to_unsigned(2 + np, 4));
+			if mc /= 15 then                       -- (M15 fetches op: its signals stay)
+				ez_clear;
+				I_MULUB <= '0'; I_MULU <= '0'; XYbit_undoc <= '0'; Suffix <= '0'; EzOp <= "0000"; IOA0 <= '0';
+				EzRA <= "0000"; EzRB <= "0000"; EzRC <= "0000";
+				AddrWZ <= '0'; WZAdd <= '0'; WZToReg <= '0'; EzBusB <= "00";
+				BusBMode <= '0'; IntVec <= '0'; JumpV <= '0';
+				StkSelA <= "00"; StkSelI <= "00"; LDMode <= '0'; JumpM <= '0';
+				EzFM <= "00"; EzBF <= "00"; EzBTR <= '0';
+			end if;
+			if mc = tfirst and NMICycle = '0' then TrapRw <= std_logic_vector(to_unsigned(trw, 2)); end if;
+			k2 := mc - 2;   -- 0 = the cycle setting up the first byte
+			if mc /= 15 and k2 >= 0 and k2 < np then
+				IncDec_16 <= "1111";
+				Set_Addr_To <= aSP;
+				-- the byte: 0 PCU, 1 PCH, 2 PCL, 3 mode
+				if adlv = 1 then
+					if MADLm = '1' then
+						case k2 is when 0 => trw := 0; when 1 => trw := 3; when 2 => trw := 1; when others => trw := 2; end case;
+					else
+						case k2 is when 0 => trw := 0; when 1 => trw := 1; when others => trw := 2; end case;
+					end if;
+					StkSelA <= "01"; StkSelI <= "01";
+				else
+					case k2 is when 0 => trw := 1; when 1 => trw := 2; when others => trw := 3; end case;
+					if trw = 3 then StkSelA <= "01"; StkSelI <= "01"; else StkSelA <= "11"; StkSelI <= "11"; end if;
+				end if;
+				case trw is
+				when 0 => Set_BusB_To <= "1101"; BusBU <= '1';
+				when 1 => Set_BusB_To <= "1101";
+				when 2 => Set_BusB_To <= "1100";
+				when others => BusBMode <= '1';
+				end case;
+			end if;
+			if mc /= 15 and k2 >= 1 and k2 <= np then Write <= '1'; end if;
+			if mc /= 15 and k2 = np then TrapJ <= '1'; end if;
 		end if;
 
 		-- karabas: eZ80 vectored interrupt (eZ80F92 as the Agon emulator): the vector came on the bus

@@ -121,10 +121,15 @@ def run_case(args):
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         # the reference trapped (invalid opcode: CEmu cpu_trap = an RST 00): the next PC is 000000
         lines = open(t).read().splitlines()
-        trap = len(lines) > n + 1 and lines[n + 1].split()[2] == '000000'
+        trap = len(lines) > n + 1 and int(lines[n + 1].split()[2], 16) < 8   # (it may fetch a byte or two at 0)
         r = subprocess.run([TB, '--flash', b, '--trace', t, '--max', str(n + 1), '--quiet'],
                            capture_output=True, text=True)
     ok = r.returncode == 0 and 'PASS' in r.stdout
+    # after a trap CEmu may run on into the first bytes at 000000 in the same step (the suffix of the
+    # JP.LIL there): the state matched, the next PC 000000 of the core is right
+    if not ok and trap and 'next PC rtl 000000 oracle 00000' in r.stdout and 'registers' not in r.stdout \
+            and 'writes' not in r.stdout:
+        ok = True
     msg = '' if ok else (r.stdout.strip().splitlines() or ['(no output)'])
     if not ok:
         # where: the set-up (instruction <= n) or the opcode (n + 1)

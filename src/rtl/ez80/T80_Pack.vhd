@@ -188,6 +188,11 @@ package T80_Pack is
 		StkSelI                 : out std_logic_vector(1 downto 0);
 		LDMode                  : out std_logic;
 		JumpM                   : out std_logic;
+		EzFM                    : out std_logic_vector(1 downto 0);
+		EzBF                    : out std_logic_vector(1 downto 0);
+		EzBTR                   : out std_logic;
+		TrapRw                  : out std_logic_vector(1 downto 0);
+		TrapJ                   : out std_logic;
 		ISet                    : in  std_logic_vector(1 downto 0);
 		MCycle                  : in  std_logic_vector(3 downto 0);
 		F                       : in  std_logic_vector(7 downto 0);

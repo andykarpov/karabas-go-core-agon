@@ -140,6 +140,7 @@ architecture rtl of T80 is
 	signal ACC, F               : std_logic_vector(7 downto 0);
 	signal Ap, Fp               : std_logic_vector(7 downto 0);
 	signal I                    : std_logic_vector(7 downto 0);
+	signal IU                   : std_logic_vector(7 downto 0);  -- karabas: eZ80 I is 16 bits (LD I,HL)
 	signal R                    : unsigned(7 downto 0);
 	signal SP, PC               : unsigned(15 downto 0);
 	-- karabas: eZ80 state. PC, WZ, A keep their 16 bits; the upper bytes run beside them
@@ -170,6 +171,10 @@ architecture rtl of T80 is
 	signal EzBusB               : std_logic_vector(1 downto 0);
 	signal BusBMode, IntVec, JumpV : std_logic;
 	signal Sfx_s, ModeB, LDMode, JumpM : std_logic;
+	signal EzFM, EzFM_r, EzBF   : std_logic_vector(1 downto 0);  -- karabas: eZ80 block I/O flags
+	signal EzBTR                : std_logic;
+	signal TrapRw               : std_logic_vector(1 downto 0);
+	signal TrapJ                : std_logic;
 	signal StkSelA, StkSelI     : std_logic_vector(1 downto 0);
 	signal SPA_L, SPI_L         : std_logic;  -- the stack for the address / inc-dec is SPL
 	signal RegWEU_wz            : std_logic;
@@ -380,6 +385,11 @@ begin
 			StkSelI     => StkSelI,
 			LDMode      => LDMode,
 			JumpM       => JumpM,
+			EzFM        => EzFM,
+			EzBF        => EzBF,
+			EzBTR       => EzBTR,
+			TrapRw      => TrapRw,
+			TrapJ       => TrapJ,
 			ISet        => ISet,
 			MCycle      => MCycle,
 			F           => F,
@@ -511,7 +521,7 @@ begin
 
 			Ap <= (others => '1');
 			Fp <= (others => '1');
-			I <= (others => '0');
+			I <= (others => '0'); IU <= (others => '0');
 			R <= (others => '0');
 			SP <= (others => '1');
 			if EZ80 /= 0 then
@@ -527,7 +537,7 @@ begin
 			BTR_r <= '0';
 			Z16_r <= '0';
 			ALU_Op_r <= "0000";
-			Save_ALU_r <= '0';
+			Save_ALU_r <= '0'; EzFM_r <= "00";
 			PreserveC_r <= '0';
 			XY_Ind <= '0';
 			I_RXDD <= '0';
@@ -666,13 +676,13 @@ begin
 					end if;
 
 					if T_Res = '1' then
-						BTR_r <= (I_BT or I_BC or I_BTR) and not No_BTR;
+						BTR_r <= ((I_BT or I_BC or I_BTR) and not No_BTR) or (EzBTR and not F(Flag_Z));
 						if Ez = '1' and IntVec = '1' then
 							-- karabas: the interrupt vector table entry at 00:I:vector
 							A <= I & WZ(7 downto 0);
 							PC <= unsigned(I & WZ(7 downto 0));
-							AU_r <= (others => '0');
-							PCU <= (others => '0');
+							AU_r <= IU;   -- (CEmu: the table at I << 8 | vector, I 16 bits)
+							PCU <= IU;
 						elsif Ez = '1' and JumpM = '1' then
 							-- karabas: the mixed return: mode 1 -> ADL, the upper byte = DI (00 unless
 							-- ADL or L); mode 0 -> Z80 mode, MBASE
@@ -728,11 +738,26 @@ begin
 								AU_r <= MBASE; PCU <= MBASE;
 								if Ez = '1' then ADL <= '0'; end if;
 							end if;
+						elsif Ez = '1' and TrapJ = '1' then
+							-- karabas: TRAP: to 000000 (MBASE:0000 in Z80 mode without MADL), ADL <= ADL or MADL
+							A <= (others => '0');
+							PC <= (others => '0');
+							if NMICycle = '1' then A(7 downto 0) <= x"66"; PC(7 downto 0) <= x"66"; end if;  -- NMI
+							if (ADL or MADL) = '1' then
+								AU_r <= (others => '0'); PCU <= (others => '0'); ADL <= '1';
+							else
+								AU_r <= MBASE; PCU <= MBASE;
+							end if;
 						elsif Call = '1' or RstP = '1' then
 							A <= WZ;
 							PC <= unsigned(WZ);
-							-- karabas: CALL / RST target (the mixed-mode rules are in the push cycles)
-							if Ez = '1' and IL_s = '1' then
+							-- karabas: CALL / RST target (the mixed-mode rules are in the push cycles); the new
+							-- mode: CALL = IL, RST = L (CEmu cpu_call / cpu_rst)
+							if Ez = '1' and RstP = '1' and L_s = '1' then
+								AU_r <= (others => '0'); PCU <= (others => '0'); ADL <= '1';
+							elsif Ez = '1' and RstP = '1' then
+								AU_r <= MBASE; PCU <= MBASE; ADL <= '0';
+							elsif Ez = '1' and IL_s = '1' then
 								AU_r <= WZU; PCU <= WZU; ADL <= '1';
 							else
 								AU_r <= MBASE; PCU <= MBASE;
@@ -775,7 +800,7 @@ begin
 								else
 									A(15 downto 8) <= ACC;
 								end if;
-								if IOA0 = '1' then -- karabas: IN0 / OUT0
+								if IOA0 = '1' then -- karabas: IN0 / OUT0 (and TSTIO in aBC)
 									A(15 downto 8) <= (others => '0');
 								end if;
 								A(7 downto 0) <= DI_Reg;
@@ -791,6 +816,7 @@ begin
 									A(7 downto 0) <= RegBusC(7 downto 0);
 								else
 									A <= RegBusC;
+									if Ez = '1' and IOA0 = '1' then A(15 downto 8) <= (others => '0'); end if; -- TSTIO: port 00:C
 									-- karabas: (BC) as a port: upper 0; as memory: by L
 									if IORQ_i = '1' then AU_r <= (others => '0');
 									elsif L_s = '1' then AU_r <= RegBusCU; else AU_r <= MBASE; end if;
@@ -855,6 +881,7 @@ begin
 						end if;
 
 						Save_ALU_r <= Save_ALU;
+						EzFM_r <= EzFM;
 						ALU_Op_r <= ALU_Op;
 
 						if Mode = 3 then
@@ -904,6 +931,13 @@ begin
 						end if;
 					end if;
 
+					-- karabas: eZ80 block I/O flags (CEmu): N = bit 7 of the data; BC types Z = (BC = 0);
+					-- INIM / OTIM / OTIMR: S Z H from B--, P = C = 0
+					if Ez = '1' and TState = 2 and EzBF /= "00" then
+						F(Flag_N) <= DI_Reg(7);
+						if EzBF = "10" then F(Flag_Z) <= not IncDecZ; end if;
+						if EzBF = "11" then F(Flag_P) <= '0'; F(Flag_C) <= '0'; end if;
+					end if;
 					if (TState = 2 and I_BTR = '1' and IR(0) = '1') or (TState = 1 and I_BTR = '1' and IR(0) = '0') then
 						ioq := ('0' & DI_Reg) + ('0' & std_logic_vector(ID16(7 downto 0)));
 						F(Flag_N) <= DI_Reg(7);
@@ -936,9 +970,15 @@ begin
 							end if;
 						end if;
 						if BTR_r = '1' then
-							PC <= PC - 2;
-							if Ez = '1' and ADL = '1' and PC < 2 then -- karabas
-								PCU <= std_logic_vector(unsigned(PCU) - 1);
+							-- karabas: a repeated block instruction goes back over its suffix too
+							if Ez = '1' and Sfx_s = '1' then
+								PC <= PC - 3;
+								if ADL = '1' and PC < 3 then PCU <= std_logic_vector(unsigned(PCU) - 1); end if;
+							else
+								PC <= PC - 2;
+								if Ez = '1' and ADL = '1' and PC < 2 then -- karabas
+									PCU <= std_logic_vector(unsigned(PCU) - 1);
+								end if;
 							end if;
 						end if;
 						if RstP = '1' then
@@ -1016,6 +1056,11 @@ begin
 				end if;
 
 				if TState = 3 then
+					-- karabas: TRAP: PC back to the invalid opcode (DD / FD CB: to d)
+					if Ez = '1' and TrapRw /= "00" then
+						PC <= PC - unsigned(TrapRw);
+						if ADL = '1' and PC < unsigned(TrapRw) then PCU <= std_logic_vector(unsigned(PCU) - 1); end if;
+					end if;
 					if LDZ = '1' then
 						WZ(7 downto 0) <= DI_Reg;
 					end if;
@@ -1033,8 +1078,19 @@ begin
 					case EzOp is
 					when "0001" => MADL <= '1';      -- STMIX
 					when "0010" => MADL <= '0';      -- RSMIX
-					when "0011" => MBASE <= ACC;     -- LD MB,A
+					when "0011" => if ADL = '1' then MBASE <= ACC; end if;  -- LD MB,A (ADL only, CEmu)
 					when "0100" => ACC <= MBASE;     -- LD A,MB
+					when "0110" =>                   -- MLT SP (the stack of L; with L the upper byte cleared)
+						if L_s = '1' then
+							SPL <= x"00" & (SPL(15 downto 8) * SPL(7 downto 0));
+						else
+							SP <= SP(15 downto 8) * SP(7 downto 0);
+						end if;
+					when "0111" =>                   -- LD I,HL: the 16-bit I
+						I <= RegBusC(7 downto 0); IU <= RegBusC(15 downto 8);
+					when "1000" =>                   -- LD HL,I (1): WZ <= MBASE:I, F: only bits 3 / 5 kept (CEmu)
+						WZ <= IU & I; WZU <= MBASE;
+						F <= F and "00101000";
 					when others => null;
 					end case;
 					if Special_LD(2) = '1' then
@@ -1074,6 +1130,7 @@ begin
 
 						when "10" =>
 							I <= ACC;
+							IU <= (others => '0'); -- karabas: LD I,A writes the 16-bit I
 						when others =>
 							R <= unsigned(ACC);
 						end case;
@@ -1088,6 +1145,10 @@ begin
 						if PreserveC_r = '0' then
 							F(4) <= F_Out(4);
 						end if;
+					elsif Ez = '1' and EzFM_r = "10" then
+						null;                    -- karabas: eZ80 block I/O C +- 1: no flags
+					elsif Ez = '1' and EzFM_r = "01" then
+						F(Flag_Z) <= F_Out(Flag_Z);  -- karabas: eZ80 INI / OUTI...: B-- sets Z only
 					else
 						F(7 downto 1) <= F_Out(7 downto 1);
 						if Ez = '1' and UOp_r = "01" then
@@ -1381,10 +1442,12 @@ begin
 	TmpAddr2 <= std_logic_vector(unsigned(signed(SP) + signed(Save_Mux)));
 	-- karabas: upper register byte writes: a UOp read / ALU result, or a 24-bit pair inc / dec (L)
 	ID24 <= unsigned(RegBusAU & RegBusA) - 1 when IncDec_16(3) = '1' else unsigned(RegBusAU & RegBusA) + 1;
+	-- (BC of the block instructions with L = 0 keeps its upper byte: CEmu cpu_dec_bc_partial_mode)
 	RegWEU_id <= '1' when Ez = '1' and IncDec_16(2) = '1' and IncDec_16(1 downto 0) /= "11" and
+	                      not (ISet = "10" and L_s = '0' and IncDec_16(1 downto 0) = "00") and
 	                      ((TState = 2 and Wait_n = '1' and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) else '0';
 	-- with L = 0 these 16-bit writes clear the upper byte (CEmu writes the L-masked value)
-	RegWEU_xw <= '1' when Ez = '1' and ExchangeWH = '1' and TState = 4 else '0'; -- EX (SP),HL
+	RegWEU_xw <= '1' when Ez = '1' and L_s = '1' and ExchangeWH = '1' and TState = 4 else '0'; -- EX (SP),HL: partial with L = 0 (CEmu)
 	RegWEU_wz <= '1' when Ez = '1' and ((WZToReg = '1' and TState = 3) or
 	                      (EzOp = "0101" and TState = 3 and MCycle = "0010")) else '0';       -- LEA, MLT
 	MLT_P <= unsigned(RegBusA(15 downto 8)) * unsigned(RegBusA(7 downto 0));
