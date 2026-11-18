@@ -48,6 +48,9 @@ module f92_spi (
 			brg_l <= 8'h02; brg_h <= 8'h00; ctl <= 8'h04; sr <= 8'h00; tsr <= 8'hff; rbr <= 8'hff;
 			hc <= 16'd0; edges <= 5'd0; sck_r <= 1'b0; mosi_r <= 1'b1;
 		end else begin
+			// an SR read clears SPIF, before the shifter: the last edge in the same clock wins (the read
+			// returned the old 0; the flag stays for the next poll)
+			if (sel && rd && addr == 3'd3) sr[7] <= 1'b0;
 			// the shifter: an edge every BRG system clocks; with CPHA 0 the first bit is out before
 			// the first edge, data is sampled on the leading (odd) edges and shifted on the trailing
 			if (busy && sys_ce) begin
@@ -68,7 +71,6 @@ module f92_spi (
 				end else
 					hc <= hc + 16'd1;
 			end
-			if (sel && rd && addr == 3'd3) sr[7] <= 1'b0;
 			if (sel && wr) begin
 				case (addr)
 				3'd0: brg_l <= din;

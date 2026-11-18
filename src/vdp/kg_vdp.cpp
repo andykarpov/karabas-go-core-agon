@@ -77,7 +77,7 @@ static void kg_mouse_poll() {
 	{
 		uint32_t v = MMIO_MOUSE;
 		auto *m = fabgl::PS2Controller::mouse();
-		if ((v & 0x80000000u) && m) {
+		if ((v & 0x80000000u) && m && mouseEnabled) {   // (disabled: dropped, nothing drains the queue)
 			int dx = (int)(v << 23) >> 23, dy = -((int)(v << 14) >> 23), dz = (int8_t)(v >> 18);
 			if (dy > 255) dy = 255;
 			if (dz > 7) dz = 7; else if (dz < -8) dz = -8;
@@ -95,7 +95,7 @@ static void kg_mouse_poll() {
 // (rust_glue.cpp sendPS2KbEventToFabgl): E0 = an extended key (code | 0xE000), F0 = a release,
 // E1 = Pause (E1 14 77 E1 F0 14 F0 77: VK_PAUSE on the first byte, the rest skipped).
 static void kg_kbd_task(void *) {
-	bool ext = false, rel = false;
+	bool ext = false, rel = false, ctrl_dn = false, alt_dn = false;
 	int skip = 0;
 	for (;;) {
 		uint32_t v = MMIO_KBD;
@@ -105,7 +105,10 @@ static void kg_kbd_task(void *) {
 		if (skip) { skip--; continue; }
 		if (b == 0xe0) { ext = true; continue; }
 		if (b == 0xf0) { rel = true; continue; }
-		if (!ext && b == 0x7e) { if (!rel) kg_dbg_on = !kg_dbg_on; rel = false; continue; }   // Scroll Lock: the debug overlay
+		// Ctrl+Alt+D: the debug overlay (the D swallowed); Ctrl 14 / E0 14, Alt 11 / E0 11
+		if (b == 0x14) ctrl_dn = !rel;
+		if (b == 0x11) alt_dn = !rel;
+		if (!ext && b == 0x23 && ctrl_dn && alt_dn) { if (!rel) kg_dbg_on = !kg_dbg_on; rel = false; continue; }
 		if (b == 0xe1) {
 			skip = 7;
 			if (kb) { fabgl::VirtualKeyItem item = {}; item.down = 1; item.vk = fabgl::VK_PAUSE; kb->injectVirtualKey(item, true); }

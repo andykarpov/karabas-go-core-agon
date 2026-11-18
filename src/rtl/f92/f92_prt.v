@@ -76,6 +76,9 @@ module f92_prt1 (
 		if (reset) begin
 			ctl <= 8'h00; rld <= 16'h0000; cnt <= 16'h0000; pre <= 8'h00; dr_h <= 8'h00;
 		end else begin
+			// a CTL read clears PRT_IRQ, before the counter: a count to 0 in the same clock wins (the read
+			// returned the old 0; the flag stays for the next one: MOS TIMER_WAIT polls a single pass)
+			if (me && rd && rg == 2'd0) ctl[7] <= 1'b0;
 			if (sys_ce && ctl[0]) begin
 				if (ctl[1]) begin
 					cnt <= rld; pre <= 8'h00; ctl[1] <= 1'b0;
@@ -91,7 +94,6 @@ module f92_prt1 (
 					pre <= pre + 8'h01;
 			end
 			// the CPU after the counter: its write wins
-			if (me && rd && rg == 2'd0) ctl[7] <= 1'b0;
 			if (me && rd && rg == 2'd1) dr_h <= cnt[15:8];
 			if (me && wr) begin
 				case (rg)

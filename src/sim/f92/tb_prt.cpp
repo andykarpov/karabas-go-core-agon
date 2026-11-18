@@ -84,6 +84,23 @@ int main(int argc, char **argv) {
 		if ((lo | hi) == 0 || n > 100000) break;
 	}
 	bool delay_ok = n >= 1152 * 16 && n <= 1152 * 16 + 2;
+	// MOS DELAY_MS (misc.asm _timer0_delay, TIMER_WAIT): single pass (CTL 0C | 03), CTL polled until
+	// PRT_IRQ. The count to 0 may fall on the clock of a poll read (sys_ce in the read clock): the
+	// flag must not be lost. Every phase of the poll against the count is tried.
+	int lost = 0;
+	for (int ph = 0; ph < 40; ph++) {
+		wr(0, 0x00); wr(1, 3); wr(2, 0); wr(0, 0x00 | 0x03);          // CLK_DIV /4, RR 3, start
+		bool seen = false;
+		for (int c = 0; c < 400 && !seen; c++) {
+			d->sys_ce = 1; d->sel = 1; d->addr = 0;
+			bool poll = (c % 7) == (ph % 7) && c >= ph / 7;
+			d->rd = poll; d->eval();
+			if (poll && (d->dout & 0x80)) seen = true;
+			clk(); d->rd = 0;
+		}
+		if (!seen) lost++;
+	}
+	if (lost) { printf("FAIL: PRT_IRQ lost in %d of 40 poll phases (a count to 0 in the clock of a CTL read)\n", lost); bad++; }
 	printf("%s: %ld random reads (%ld bad), MOS 1 ms delay = %ld system clocks (%.3f ms at 18.432 MHz)\n",
 	       bad == 0 && delay_ok ? "PASS" : "FAIL", reads, bad, n, n / 18432.0);
 	delete d;

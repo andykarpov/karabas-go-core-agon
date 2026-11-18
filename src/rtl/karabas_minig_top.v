@@ -299,7 +299,7 @@ kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_ez_hold (.clk(clk_ez), .d(areset 
 reg ez_reset_n = 1'b0;
 wire [127:0] ez_regx;
 wire ez_halt_n;
-reg [31:0] dbg_ez = 32'd0;                 // the VDP debug overlay (Scroll Lock): eZ80 state
+reg [31:0] dbg_ez = 32'd0;                 // the VDP debug overlay (Ctrl+Alt+D): eZ80 state
 always @(posedge clk_ez) dbg_ez <= { ez_reset_n, ez_halt_n, 6'd0, ez_regx[23:0] };
 always @(posedge clk_ez) ez_reset_n <= ~(areset_ez | ez_hold);
 
