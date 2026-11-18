@@ -290,6 +290,7 @@ begin
 					if dc = 1 then Set_BusA_To(0) <= '0'; else Set_BusA_To(0) <= '1'; end if;
 				end if;
 				if dc = 2 then UOp <= "01"; end if;
+				if dc = 1 and lw = 0 and not sp then UOp <= "10"; end if;  -- 16-bit value: upper 0
 				if dc = 0 or (dc = 1 and lw = 1) then
 					Inc_WZ <= '1'; Set_Addr_To <= aZI;
 				end if;
@@ -2562,14 +2563,17 @@ begin
 								Set_BusA_To(3) <= '0';
 							end if;
 						end if;
-					elsif Lm = '1' and MCycle = "0011" then
-						UOp <= "10";
+					elsif MCycle = "0011" then
+						UOp <= "10";   -- a 16-bit nn: the upper byte 0 (with or without L, CEmu)
 					end if;
 				when "00001001"|"00011001"|"00101001"|"00111001" =>
-					-- ADD HL,ss (DD / FD: ADD IX / IY,ss): with L the upper byte in M4
+					-- ADD HL,ss (DD / FD: ADD IX / IY,ss): with L the upper byte in M4, without the upper
+					-- byte cleared with the high byte (M3)
 					if lw = 1 then
 						MCycles <= "0100";
 						if mc = 4 then ez_alu_upper("0001", '1'); end if;
+					elsif mc = 3 then
+						UOp <= "10";
 					end if;
 				when "11000101"|"11010101"|"11100101"|"11110101" =>
 					-- PUSH qq with L: upper, high, low (the upper byte of AF is 00)
@@ -2598,7 +2602,11 @@ begin
 						if mc = 1 then TStates <= "101"; end if;
 					end if;
 				when "11000001"|"11010001"|"11100001"|"11110001" =>
-					-- POP qq with L: low, high, upper (the upper byte of AF is dropped)
+					-- POP qq with L: low, high, upper (the upper byte of AF is dropped); without L the
+					-- upper byte of the pair is cleared with the high byte
+					if lw = 0 and DPAIR /= "11" and mc = 3 then
+						UOp <= "10";
+					end if;
 					if lw = 1 then
 						ez_clear;
 						MCycles <= "0100";
@@ -2850,16 +2858,20 @@ begin
 						Save_ALU <= '1';
 					end if;
 				when "01000010"|"01010010"|"01100010"|"01110010" =>
-					-- SBC HL,ss: with L the upper byte in M4
+					-- SBC HL,ss: with L the upper byte in M4, without the upper byte cleared in M3
 					if lw = 1 then
 						MCycles <= "0100";
 						if mc = 4 then ez_alu_upper("0011", '0'); end if;
+					elsif mc = 3 then
+						UOp <= "10";
 					end if;
 				when "01001010"|"01011010"|"01101010"|"01111010" =>
-					-- ADC HL,ss: with L the upper byte in M4
+					-- ADC HL,ss: with L the upper byte in M4, without the upper byte cleared in M3
 					if lw = 1 then
 						MCycles <= "0100";
 						if mc = 4 then ez_alu_upper("0001", '0'); end if;
+					elsif mc = 3 then
+						UOp <= "10";
 					end if;
 				when "01001011"|"01011011"|"01101011"|"01111011" =>
 					-- LD dd,(nn)

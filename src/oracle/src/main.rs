@@ -10,7 +10,7 @@
 // trace line (after the instruction at PC): n cycles PC ADL MADL MB AF BC DE HL IX IY SPS SPL I IFF1 IFF2,
 // then its bus events: w:ADDR=VV (memory write), r:PORT=VV / o:PORT=VV (port read / write),
 // int:VV (interrupt taken after it; the entry's writes follow). Without --hostfs only.
-use agon_ez80_emulator::{gpio, AgonMachine, AgonMachineConfig, KgEv, RamInit, SerialLink};
+use agon_ez80_emulator::{gpio, kg_ld_a_r_fix, kg_r_fix, AgonMachine, AgonMachineConfig, KgEv, RamInit, SerialLink};
 use ez80::{Reg16, Reg8};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -192,11 +192,31 @@ fn run_z80(a: &[String], prog: &str) {
     let mut cpu = ez80::Cpu::new_z80();
     // SP after reset is undefined on the Z80: T80 sets FFFF, the crate 0
     cpu.state.reg.set16(Reg16::SP, 0xffff);
+    // AF' too (T80 FFFF, the crate 0; the shadows are private in the crate): EX AF,AF' once with
+    // AF = FFFF at a scratch copy of address 0, then AF = FFFF again and PC 0
+    {
+        let keep = bus.mem[0];
+        bus.mem[0] = 0x08;
+        cpu.execute_instruction(&mut bus);
+        bus.mem[0] = keep;
+        bus.ev.clear();
+        cpu.state.reg.set16(Reg16::AF, 0xffff);
+        cpu.state.reg.set8(Reg8::R, 0);
+        cpu.state.set_pc(0);
+    }
     let mut out = std::io::BufWriter::new(std::fs::File::create(arg::<String>(a, "--trace").expect("--trace")).unwrap());
     for n in 1..=n_max {
         let pc = cpu.state.pc();
         bus.ev.clear();
+        let r_before = cpu.state.reg.get8(Reg8::R);
+        let ib = [bus.mem[(pc & 0xffff) as usize], bus.mem[((pc + 1) & 0xffff) as usize],
+                  bus.mem[((pc + 2) & 0xffff) as usize], bus.mem[((pc + 3) & 0xffff) as usize]];
         cpu.execute_instruction(&mut bus);
+        // R as the Z80 counts it (no suffixes on the Z80: the 40 / 49 / 52 / 5B codes are LD r,r)
+        let ibz = if matches!(ib[0], 0x40 | 0x49 | 0x52 | 0x5b) { [0, 0, 0, 0] } else { ib };
+        let rn = kg_r_fix(r_before, cpu.state.reg.get8(Reg8::R), ibz, false);
+        cpu.state.reg.set8(Reg8::R, rn);
+        kg_ld_a_r_fix(&mut cpu.state.reg, ibz, rn);
         let r = &cpu.state.reg;
         writeln!(
             out,

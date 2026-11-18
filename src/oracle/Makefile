@@ -27,6 +27,9 @@ $(EZ)/.ready: Makefile
 	sed -i -e '/env.state.reg.update_add24_flags(aaa, bbb, vvvv);/a\    env.state.reg.put_flag(Flag::H, ((aaa ^ bbb ^ vvvv) >> 12) \& 1 != 0); // karabas: H from bit 12 (CEmu)' \
 	       -e '/env.state.reg.update_arithmetic_flags_24(aaa, bbb, vvvv, \(true\|false\));/a\    env.state.reg.put_flag(Flag::H, ((aaa ^ bbb ^ vvvv) >> 12) \& 1 != 0); // karabas: H from bit 12 (CEmu)' $(EZ)/src/operators.rs
 	test $$(grep -c 'karabas: H from bit 12' $(EZ)/src/operators.rs) = 3
+	# INI / IND / INIR / INDR: the port address is BC before B is decremented (TUZD, CEmu), the
+	# crate had it after
+	python3 -I -c "import sys; p=sys.argv[1]; s=open(p).read(); a='            let b = env.state.reg.inc_dec8(Reg8::B, false /* decrement */);\n            let address = env.state.reg.get16(Reg16::BC);\n\n            let value = env.port_in(address);'; assert s.count(a)==1; s=s.replace(a, '            let address = env.state.reg.get16(Reg16::BC); // karabas: INI BC before the decrement\n            let b = env.state.reg.inc_dec8(Reg8::B, false /* decrement */);\n\n            let value = env.port_in(address);'); open(p,'w').write(s)" $(EZ)/src/opcode_io.rs
 	touch $@
 
 $(CR)/.ready: $(EMU)/agon-ez80-emulator/Cargo.toml $(wildcard $(EMU)/agon-ez80-emulator/src/*.rs) kg_trace.rs Makefile
@@ -36,7 +39,7 @@ $(CR)/.ready: $(EMU)/agon-ez80-emulator/Cargo.toml $(wildcard $(EMU)/agon-ez80-e
 	sed -i -e 's/^version.workspace = true/version = "1.2.6"/' -e 's/^authors.workspace = true/authors = ["Tom Morton"]/' \
 	       -e 's/^edition.workspace = true/edition = "2021"/' -e 's/^license.workspace = true/license = "GPL-3.0"/' $(CR)/Cargo.toml
 	printf '\n// karabas: deterministic stepping for the oracle\n#[path = "../../../kg_trace.rs"]\npub mod kg_trace;\n' >> $(CR)/src/agon_machine.rs
-	printf '\n// karabas: the bus events of the oracle\npub use agon_machine::kg_trace::KgEv;\n' >> $(CR)/src/lib.rs
+	printf '\n// karabas: the bus events of the oracle\npub use agon_machine::kg_trace::{kg_ld_a_r_fix, kg_r_fix, KgEv};\n' >> $(CR)/src/lib.rs
 	touch $@
 
 sd: build/sd.img

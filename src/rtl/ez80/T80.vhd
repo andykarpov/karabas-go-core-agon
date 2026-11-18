@@ -1287,8 +1287,9 @@ begin
 
 	RegAddrA <=
 			-- 16 bit increment/decrement
+			-- karabas: with a DD / FD prefix only HL is IX / IY: INC / DEC BC / DE stay BC / DE (FD 13)
 			Alternate & IncDec_16(1 downto 0) when (TState = 2 or
-				(TState = 3 and MCycle = "0001" and IncDec_16(2) = '1')) and XY_State = "00" else
+				(TState = 3 and MCycle = "0001" and IncDec_16(2) = '1')) and (XY_State = "00" or IncDec_16(1 downto 0) /= "10") else
 			XY_State(1) & "11" when (TState = 2 or
 				(TState = 3 and MCycle = "0001" and IncDec_16(2) = '1')) and IncDec_16(1 downto 0) = "10" else
 			-- EX HL,DL
@@ -1370,16 +1371,17 @@ begin
 	TmpAddr2 <= std_logic_vector(unsigned(signed(SP) + signed(Save_Mux)));
 	-- karabas: upper register byte writes: a UOp read / ALU result, or a 24-bit pair inc / dec (L)
 	ID24 <= unsigned(RegBusAU & RegBusA) - 1 when IncDec_16(3) = '1' else unsigned(RegBusAU & RegBusA) + 1;
-	RegWEU_id <= '1' when Ez = '1' and L_s = '1' and IncDec_16(2) = '1' and IncDec_16(1 downto 0) /= "11" and
+	RegWEU_id <= '1' when Ez = '1' and IncDec_16(2) = '1' and IncDec_16(1 downto 0) /= "11" and
 	                      ((TState = 2 and Wait_n = '1' and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) else '0';
-	RegWEU_xw <= '1' when Ez = '1' and L_s = '1' and ExchangeWH = '1' and TState = 4 else '0'; -- EX (SP),HL
-	RegWEU_wz <= '1' when Ez = '1' and L_s = '1' and ((WZToReg = '1' and TState = 3) or
+	-- with L = 0 these 16-bit writes clear the upper byte (CEmu writes the L-masked value)
+	RegWEU_xw <= '1' when Ez = '1' and ExchangeWH = '1' and TState = 4 else '0'; -- EX (SP),HL
+	RegWEU_wz <= '1' when Ez = '1' and ((WZToReg = '1' and TState = 3) or
 	                      (EzOp = "0101" and TState = 3 and MCycle = "0010")) else '0';       -- LEA, MLT
 	MLT_P <= unsigned(RegBusA(15 downto 8)) * unsigned(RegBusA(7 downto 0));
 	-- EX DE,HL: CEmu swaps the L-masked values (24 bits with L, the upper bytes cleared without)
 	RegWEU_dh <= '1' when Ez = '1' and ExchangeDH = '1' and (TState = 3 or TState = 4) else '0';
 	RegWEU <= (RegWEU_rd and Ez) or RegWEU_id or RegWEU_xw or RegWEU_wz or RegWEU_dh;
-	RegDIU <= (others => '0') when RegWEU_dh = '1' and L_s = '0' else
+	RegDIU <= (others => '0') when (RegWEU_dh = '1' or RegWEU_id = '1' or RegWEU_xw = '1' or RegWEU_wz = '1') and L_s = '0' else
 	          RegBusBU when RegWEU_dh = '1' and TState = 3 else
 	          RegBusAU_r when RegWEU_dh = '1' else
 	          std_logic_vector(ID24(23 downto 16)) when RegWEU_id = '1' else
@@ -1608,7 +1610,7 @@ begin
 	--   IntCycle/NMICycle  interrupt acknowledge, not an instruction start
 	-- RETN needs no exclusion: I_RETN is decoded in its own M3.
 	InsnStart <= '1' when MCycle = "0001" and TState = 2 and Prefix = "00" and Suffix = '0' and
-	                      (SetEI = '0' or Ez = '1') and IntCycle = '0' and NMICycle = '0' else '0';
+	                      IntCycle = '0' and NMICycle = '0' else '0';
 -------------------------------------------------------------------------
 --
 -- Main state machine
@@ -1655,15 +1657,10 @@ begin
 					No_BTR <= (I_BT and (not IR(4) or not F(Flag_P))) or
 							(I_BC and (not IR(4) or F(Flag_Z) or not F(Flag_P))) or
 							(I_BTR and (not IR(4) or F(Flag_Z)));
-					if TState = 2 and Ez = '0' then
-						if SetEI = '1' then
-							IntE_FF1 <= '1';
-							IntE_FF2 <= '1';
-						end if;
-					end if;
-					-- karabas: eZ80: EI sets IFF in its own M1 (T3), so the next InsnStart shows it; an
-					-- interrupt still waits one instruction (no acceptance while SetEI at the end of EI)
-					if TState = 3 and Ez = '1' and SetEI = '1' and MCycle = "0001" then
+					-- karabas: EI sets IFF in its own M1 (T3), so the next InsnStart shows it (T80 did it at
+					-- T2 of the next M1); an interrupt still waits one instruction (no acceptance while
+					-- SetEI at the end of EI)
+					if TState = 3 and SetEI = '1' and MCycle = "0001" then
 						IntE_FF1 <= '1';
 						IntE_FF2 <= '1';
 					end if;

@@ -15,6 +15,7 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <deque>
 #include "Vtb_t80.h"
 #include "verilated.h"
 
@@ -23,6 +24,34 @@
 #endif
 
 struct Ev { char k; uint32_t a; uint8_t v; };
+
+// The eZ80F92 memory map of the Agon (as agon_machine.rs): flash 128 KB at FLASH_ADDR_U (port F7)
+// << 16, on-chip SRAM 8 KB at {RAM_ADDR_U (B5)}:E000 if RAM_CTL (B4) bit 7, external 512 KB in the
+// CS0 window (A8 / A9, mirrored), reads elsewhere F5. The registers follow the core's port writes.
+struct Map {
+    std::vector<uint8_t> rom = std::vector<uint8_t>(0x20000), ram = std::vector<uint8_t>(8192), ext = std::vector<uint8_t>(0x80000);
+    uint8_t flash_u = 0, seg = 0xff, lbr = 0, ubr = 0xff;
+    bool onchip = true;
+    uint8_t *at(uint32_t a, bool wr) {
+        a &= 0xffffff;
+        uint32_t o = a - (((uint32_t)seg << 16) + 0xe000);
+        if (onchip && o < 8192) return &ram[o];
+        if (((a - ((uint32_t)flash_u << 16)) & 0xffffff) < 0x20000) return wr ? nullptr : &rom[(a - ((uint32_t)flash_u << 16)) & 0xffffff];
+        if ((a >> 16) >= lbr && (a >> 16) <= ubr) return &ext[a & 0x7ffff];
+        return nullptr;
+    }
+    uint8_t rd(uint32_t a) { uint8_t *p = at(a, false); return p ? *p : 0xf5; }
+    void wr(uint32_t a, uint8_t v) { uint8_t *p = at(a, true); if (p) *p = v; }
+    void out(uint16_t port, uint8_t v) {
+        switch (port & 0xff) {
+        case 0xf7: flash_u = v; break;
+        case 0xb4: onchip = v & 0x80; break;
+        case 0xb5: seg = v; break;
+        case 0xa8: lbr = v; break;
+        case 0xa9: ubr = v; break;
+        }
+    }
+};
 struct Line {
     uint64_t n; uint32_t pc, adl, madl, mb, af, bc, de, hl, ix, iy, sps, spl, i, iff1, iff2;
     std::vector<Ev> ev;
@@ -59,7 +88,7 @@ int main(int argc, char **argv) {
     const char *memf = 0, *flashf = 0, *trf = 0;
     uint64_t max = ~0ull;
     uint32_t fmask = EZ80 ? 0xd7 : 0xff;  // eZ80: flag bits 3 and 5 are undocumented (CEmu: "undef")
-    bool quiet = false;
+    bool quiet = false, io_lo = false;   // --io-lo: port writes compared by the low address byte
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--mem")) memf = argv[++i];
         else if (!strcmp(argv[i], "--flash")) flashf = argv[++i];
@@ -67,29 +96,39 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--max")) max = strtoull(argv[++i], 0, 10);
         else if (!strcmp(argv[i], "--fmask")) fmask = strtoul(argv[++i], 0, 0);
         else if (!strcmp(argv[i], "--quiet")) quiet = true;
+        else if (!strcmp(argv[i], "--io-lo")) io_lo = true;
     }
     const uint32_t MEMSZ = EZ80 ? (1u << 24) : 65536, AMASK = MEMSZ - 1;
     if ((!memf && !flashf) || !trf) { fprintf(stderr, "usage: %s (--mem mem.bin | --flash mos.bin) --trace trace.txt [--max N] [--fmask M]\n", argv[0]); return 2; }
-    std::vector<uint8_t> mem(MEMSZ);
+    std::vector<uint8_t> mem(EZ80 ? 0 : MEMSZ);
+    Map map;
     {
         FILE *f = fopen(memf ? memf : flashf, "rb");
         if (!f) { perror(memf ? memf : flashf); return 2; }
-        size_t n = fread(mem.data(), 1, MEMSZ, f);
+        size_t n = fread(EZ80 ? map.rom.data() : mem.data(), 1, EZ80 ? 0x20000 : MEMSZ, f);
         fclose(f);
-        if (memf && n != MEMSZ) { fprintf(stderr, "%s: %zu bytes, want %u\n", memf, n, MEMSZ); return 2; }
+        if (memf && !EZ80 && n != MEMSZ) { fprintf(stderr, "%s: %zu bytes, want %u\n", memf, n, MEMSZ); return 2; }
     }
-    std::vector<Line> tr;
-    {
-        FILE *t = fopen(trf, "r");
-        if (!t) { perror(trf); return 2; }
-        static char buf[1 << 16];
-        while (fgets(buf, sizeof buf, t)) {
-            Line l;
-            if (parse(buf, l)) tr.push_back(std::move(l));
-            if (tr.size() >= max + 1) break;
+    auto mrd = [&](uint32_t a) -> uint8_t { return EZ80 ? map.rd(a) : mem[a & AMASK]; };
+    // the trace is read as it goes (it can come through a pipe: --trace /dev/stdin); Tr keeps the
+    // lines from instruction base on, tr[i] = instruction i + 1
+    FILE *tf = fopen(trf, "r");
+    if (!tf) { perror(trf); return 2; }
+    struct Tr {
+        FILE *f; uint64_t max; std::deque<Line> v; uint64_t base = 0; bool eof = false;  // deque: references stay valid
+        bool have(uint64_t i) {   // line i (0-based) available?
+            while (!eof && i >= base + v.size()) {
+                static char buf[1 << 16];
+                if (base + v.size() > max || !fgets(buf, sizeof buf, f)) { eof = true; break; }
+                Line l;
+                if (parse(buf, l)) v.push_back(std::move(l));
+            }
+            return i < base + v.size();
         }
-        fclose(t);
-    }
+        Line &operator[](uint64_t i) { have(i); return v[i - base]; }
+        void drop_before(uint64_t i) { if (i > base + 1024) { v.erase(v.begin(), v.begin() + (i - base)); base = i; } }
+        uint64_t size_at_least(uint64_t i) { return have(i) ? i + 1 : base + v.size(); }
+    } tr{tf, max};
     Verilated::commandArgs(argc, argv);
     Vtb_t80 *top = new Vtb_t80;
     top->int_n = 1; top->nmi_n = 1; top->reset_n = 0; top->clk = 0;
@@ -104,11 +143,10 @@ int main(int argc, char **argv) {
     uint64_t cycles = 0, checked = 0;
     auto fail = [&](const char *what, const Line &l) {
         printf("FAIL at instruction %llu (pc %06x): %s\n", (unsigned long long)l.n, l.pc, what);
-        printf("  bytes at pc: %02x %02x %02x %02x %02x\n", mem[l.pc & AMASK], mem[(l.pc + 1) & AMASK], mem[(l.pc + 2) & AMASK],
-               mem[(l.pc + 3) & AMASK], mem[(l.pc + 4) & AMASK]);
+        printf("  bytes at pc: %02x %02x %02x %02x %02x\n", mrd(l.pc), mrd(l.pc + 1), mrd(l.pc + 2), mrd(l.pc + 3), mrd(l.pc + 4));
         exit(1);
     };
-    while (k <= tr.size() && cycles < 2000000000ull) {
+    while (cycles < 20000000000ull) {
         top->clk = 1; top->eval();
         bool rd = top->rd_n == 0, wr = top->wr_n == 0;
         uint32_t a = EZ80 ? (((uint32_t)top->au << 16) | top->a) : top->a;
@@ -117,9 +155,9 @@ int main(int argc, char **argv) {
             top->di = (uint8_t)int_vec;
             top->int_n = 1;
             int_vec = -1;
-        } else if (rd && !top->mreq_n) top->di = mem[a & AMASK];
+        } else if (rd && !top->mreq_n) top->di = mrd(a);
         else if (rd && !top->iorq_n) {
-            const Line *cur = (k >= 1 && k <= tr.size()) ? &tr[k - 1] : nullptr;
+            const Line *cur = (k >= 1 && tr.have(k - 1)) ? &tr[k - 1] : nullptr;
             if (!prev_rd && cur) {
                 size_t j = rd_idx;
                 while (j < cur->ev.size() && cur->ev[j].k != 'r') j++;
@@ -133,7 +171,8 @@ int main(int argc, char **argv) {
             }
         }
         if (wr && !prev_wr) seen.push_back(Ev{top->mreq_n ? 'o' : 'w', top->mreq_n ? (a & 0xffff) : (a & AMASK), (uint8_t)top->dout});
-        if (wr && !top->mreq_n) mem[a & AMASK] = top->dout;
+        if (wr && !top->mreq_n) { if (EZ80) map.wr(a, top->dout); else mem[a & AMASK] = top->dout; }
+        if (EZ80 && wr && !prev_wr && top->mreq_n) map.out(a & 0xffff, top->dout);
         prev_wr = wr; prev_rd = rd;
         top->eval();
         bool insn = top->insn;
@@ -165,7 +204,7 @@ int main(int argc, char **argv) {
                              l.af, eBC, eDE, eHL, eIX, eIY, l.sps & 0xffff, l.spl, l.mb, l.adl, l.madl, l.i, l.iff1, l.iff2);
                     fail(msg, l);
                 }
-                if (k < tr.size() && PC24 != (tr[k].pc & AMASK)) {
+                if (tr.have(k) && PC24 != (tr[k].pc & AMASK)) {
                     snprintf(msg, sizeof msg, "next PC rtl %06x oracle %06x", PC24, tr[k].pc);
                     fail(msg, l);
                 }
@@ -178,7 +217,8 @@ int main(int argc, char **argv) {
                 std::stable_sort(seen.begin(), seen.end(), [&](const Ev &x, const Ev &y) { return key(x) < key(y); });
                 bool same = want.size() == seen.size();
                 for (size_t j = 0; same && j < want.size(); j++)
-                    same = want[j].k == seen[j].k && (want[j].a & AMASK) == seen[j].a && want[j].v == seen[j].v;
+                    same = want[j].k == seen[j].k && want[j].v == seen[j].v &&
+                           ((want[j].a & AMASK) == seen[j].a || (io_lo && want[j].k == 'o' && (want[j].a & 0xff) == (seen[j].a & 0xff)));
                 if (!same) {
                     std::string s = "writes\n  rtl   ";
                     for (auto &e : seen) { char b[32]; snprintf(b, sizeof b, " %c:%06x=%02x", e.k, e.a, e.v); s += b; }
@@ -192,11 +232,11 @@ int main(int argc, char **argv) {
             seen.clear();
             rd_idx = 0;
             k++;
+            if (k >= 2) tr.drop_before(k - 2);
+            if (!tr.have(k - 1) || k > max) break;
             // the oracle takes an interrupt after instruction k: INT on now, during it
-            if (k >= 1 && k <= tr.size())
-                for (auto &e : tr[k - 1].ev)
-                    if (e.k == 'i') { int_vec = (int)e.a; top->int_n = 0; }
-            if (k > tr.size() || k > max) break;
+            for (auto &e : tr[k - 1].ev)
+                if (e.k == 'i') { int_vec = (int)e.a; top->int_n = 0; }
         }
         prev_insn = insn;
         if (getenv("TB_DEBUG") && k >= (uint64_t)atoll(getenv("TB_DEBUG")) && k <= (uint64_t)atoll(getenv("TB_DEBUG")) + 1) {
