@@ -25,11 +25,14 @@ int main(int argc, char **argv) {
 	const char *inf = nullptr, *ppm = nullptr;
 	double baud = 1152000, in_after = 1000;
 	uint64_t max_cycles = 2000ull * 1000 * 1000;
+	std::vector<uint8_t> ps2;        // --ps2 "hex bytes": PS/2 set 2 bytes on ps2_code / ps2_wr, 200 ms after the first link poll
+	size_t ps2_pos = 0;
 	for (int i = 2; i < argc; i++) {
 		if (!strcmp(argv[i], "--in")) inf = argv[++i];
 		else if (!strcmp(argv[i], "--ppm")) ppm = argv[++i];
 		else if (!strcmp(argv[i], "--baud")) baud = atof(argv[++i]);
 		else if (!strcmp(argv[i], "--in-after")) in_after = atof(argv[++i]);
+		else if (!strcmp(argv[i], "--ps2")) { for (const char *p = argv[++i]; *p; ) { char *e; long b = strtol(p, &e, 16); if (e == p) break; ps2.push_back((uint8_t)b); p = e; } }
 		else if (!strcmp(argv[i], "--max")) max_cycles = strtoull(argv[++i], 0, 10) * 1000000ull;
 	}
 	{
@@ -93,6 +96,10 @@ int main(int argc, char **argv) {
 			t->ez_rx_data = in[in_pos++]; t->ez_rx_valid = 1;
 		}
 		t->ez_tx_ready = 1;
+		t->ps2_wr = 0;
+		if (in_start >= 0 && ps2_pos < ps2.size() && cyc >= (uint64_t)in_start + 15000000 && cyc % 75000 == 0) {
+			t->ps2_code = ps2[ps2_pos++]; t->ps2_wr = 1;
+		}
 		t->sim_shot_req = shot_asked;
 
 		t->clk = 0; t->eval();
@@ -104,6 +111,7 @@ int main(int argc, char **argv) {
 				printf("DONE us %.0f (from the first byte) at cycle %llu\n", (cyc - in_start) / clk_per_us, (unsigned long long)cyc);
 				fflush(stdout);
 			}
+			if (getenv("TB_TX")) printf("tx %02x at %.1f ms\n", b, cyc / 75000.0);
 			tx_state = (b == 0x80) ? 1 : (tx_state == 1 && b == 0x01) ? 2 : 0;
 		}
 		t->clk = 1; t->clk_pix = (cyc % 3) == 0; t->eval();

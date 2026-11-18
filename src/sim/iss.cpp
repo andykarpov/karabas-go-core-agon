@@ -59,6 +59,8 @@ int main(int argc, char **argv) {
     int nshot = 0;
     const char *shot_poll = nullptr;   // --shot-poll file.ppm: at the --stop-poll answer a screenshot, then exit
     bool sp_pend = false;
+    std::vector<uint8_t> ps2;          // --ps2 us "hex bytes": PS/2 set 2 bytes on MMIO_KBD from that time
+    uint64_t ps2_at = 0; size_t ps2_pos = 0;
     uint32_t scan_desc = 0;            // MMIO_SCAN: the frame description of the firmware (scan_decode.h)
     int stop_tag = -1;
     for (int i = 2; i < argc; i++) {
@@ -74,6 +76,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--stop-poll")) stop_tag = strtol(argv[++i], 0, 16);
         else if (!strcmp(argv[i], "--shot")) { shots.push_back(strtoull(argv[++i], 0, 10)); shot_prefix = argv[++i]; }
         else if (!strcmp(argv[i], "--shot-poll")) shot_poll = argv[++i];
+        else if (!strcmp(argv[i], "--ps2")) { ps2_at = strtoull(argv[++i], 0, 10); for (const char *p = argv[++i]; *p; ) { char *e; long b = strtol(p, &e, 16); if (e == p) break; ps2.push_back((uint8_t)b); p = e; } }
         else if (!strcmp(argv[i], "--in")) {
             FILE *f = fopen(argv[++i], "rb");
             if (!f) { perror(argv[i]); return 2; }
@@ -126,6 +129,7 @@ int main(int argc, char **argv) {
             case 0x18: return (uint32_t)(ninstr / ipu / 16667);   // 60 Hz frames
             case 0x1c: return (uint32_t)(ninstr / ipu / 1000);
             case 0x58: return want_exit ? 1u : 0u;
+            case 0x64: if (ps2_pos < ps2.size() && ninstr / ipu >= ps2_at) return 0x100u | ps2[ps2_pos++]; return 0u;
             case 0x5c: { uint64_t l = aud_level(); return l < AUD_DEPTH ? (uint32_t)(AUD_DEPTH - l) : 0u; }
             case 0x54: {
                 uint32_t k = 0;
