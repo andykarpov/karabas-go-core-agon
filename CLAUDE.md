@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An Agon Light / Console8 core for the Karabas Go, Mini and Mini G boards (Xilinx Spartan-6 XC6SLX25, ISE 14.7, XST): eZ80F92 + 512 KB RAM + SD card running the stock MOS, and a VDP compatible with the Console8 firmware. No Agon or VDP on an FPGA existed when this started (2026-11-18). Docs, in Russian: `docs/PLAN.md` (research, decisions, phases). Follow the phases; record a changed decision in PLAN.md.
 
-User decisions (2026-11-18): build an Agon; private repo for now. The eZ80 CPU is our own extension of the BSD T80 (user, 2026-11-18): MSXnano-eZ80 (no licence) and the emulators are references only, never copy their code. VDP route 1 (the real firmware on VexRiscv) proposed after Ф0, waiting for the user.
+User decisions (2026-11-18): build an Agon; private repo for now. The eZ80 CPU is our own extension of the BSD T80 (user, 2026-11-18): MSXnano-eZ80 (no licence) and the emulators are references only, never copy their code. VDP route 1 chosen by the user after Ф0 (2026-11-18): the real firmware on VexRiscv + our speed patches, scanout / audio FIFO / glue in RTL.
 
 ## Layout
 
