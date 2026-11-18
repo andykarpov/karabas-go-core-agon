@@ -38,7 +38,7 @@ $(B)/gl/%.o: $(GL)/%.cpp
 # karabas: our patches to vdp-gl, one per file (patches/<path, / as _>.patch): the patched copy in
 # $(B)/pgl/ is built instead of the upstream file
 GL_PATCHED := dispdrivers/vga2controller.cpp dispdrivers/vga4controller.cpp dispdrivers/vga8controller.cpp \
-              dispdrivers/vga16controller.cpp dispdrivers/vga64controller.cpp
+              dispdrivers/vga16controller.cpp dispdrivers/vga64controller.cpp fabutils.cpp
 define patched
 $(B)/pgl/$(1): $(GL)/$(1) patches/$(subst /,_,$(1)).patch
 	@mkdir -p $$(dir $$@)

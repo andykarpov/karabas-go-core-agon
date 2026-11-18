@@ -73,6 +73,9 @@ WORK = {
     # the same in mode 1 (640x480, 4 colours) and mode 3 (640x240, 64 colours)
     'text1': lambda: mode(1) + text(8192),
     'text3': lambda: mode(3) + text(8192),
+    # mode 2 (640x480, 2 colours) and mode 8 (320x240, 64 colours)
+    'text2': lambda: mode(2) + text(8192),
+    'text8': lambda: mode(8) + text(8192),
     # 8 mode changes 0..7
     'modes': lambda: b''.join(mode(m) for m in range(8)) + mode(0),
     # 200 lines across the screen, mode 0 (OS coordinates 1280x1024)

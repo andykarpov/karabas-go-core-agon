@@ -1,0 +1,30 @@
+--- a/fabutils.cpp
++++ b/fabutils.cpp
+@@ -447,8 +447,27 @@
+ ///////////////////////////////////////////////////////////////////////////////////
+ // rgb222_to_hsv
+ // R, G, B in the 0..3 range
++// karabas: R, G, B are 0..3, so the 64 results are computed once (by the original code below,
++// rgb222_to_hsv_calc) and then read from a table: updateRGB2PaletteLUT calls this ~1100 times per
++// palette change, in soft double on the soft CPU
++static void rgb222_to_hsv_calc(int R, int G, int B, double * h, double * s, double * v);
+ void rgb222_to_hsv(int R, int G, int B, double * h, double * s, double * v)
+ {
++  static double t[64][3];
++  static bool ready = false;
++  if (!ready) {
++    for (int i = 0; i < 64; ++i)
++      rgb222_to_hsv_calc(i & 3, (i >> 2) & 3, i >> 4, &t[i][0], &t[i][1], &t[i][2]);
++    ready = true;
++  }
++  int i = (R & 3) | ((G & 3) << 2) | ((B & 3) << 4);
++  *h = t[i][0];
++  *s = t[i][1];
++  *v = t[i][2];
++}
++
++static void rgb222_to_hsv_calc(int R, int G, int B, double * h, double * s, double * v)
++{
+   double r = R / 3.0;
+   double g = G / 3.0;
+   double b = B / 3.0;

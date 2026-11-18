@@ -5,7 +5,7 @@
    auto getPixel = getPixelLambda(mode);
    auto setRowPixel = setRowPixelLambda(mode);
 +  // karabas: PaintMode::Set (text) with an inlined pixel setter instead of a std::function call
-+  // per pixel: about half of the text time on the soft CPU of the Karabas core
++  // per pixel (the generic path, for the glyphs the fast path above does not take)
 +  if (mode == PaintMode::Set) {
 +    genericDrawGlyph(glyph, glyphOptions, penColor, brushColor, updateRect,
 +                     getPixel,
