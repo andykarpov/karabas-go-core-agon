@@ -151,6 +151,7 @@ architecture rtl of T80 is
 	signal L_s, IL_s            : std_logic;  -- data / immediate long of the instruction
 	signal Ez                   : std_logic;  -- EZ80 generic as a signal
 	signal PCxU                 : std_logic_vector(7 downto 0);  -- upper byte of the fetch address
+	signal VecRd                : std_logic;  -- karabas: reading the interrupt vector table
 	signal SPcur                : unsigned(15 downto 0);         -- low 16 bits of the stack pointer in use
 	signal SPcurU               : std_logic_vector(7 downto 0);  -- its address upper byte
 	signal RegBusAU, RegBusBU, RegBusCU, RegDIU : std_logic_vector(7 downto 0);
@@ -330,7 +331,8 @@ begin
 
 	-- karabas: eZ80 helpers
 	Ez <= '1' when EZ80 /= 0 else '0';
-	PCxU <= PCU when ADL = '1' else MBASE;
+	-- (the vector table is read at 00:I:vector also from Z80 mode: VecRd between IntVec and JumpV)
+	PCxU <= PCU when ADL = '1' or VecRd = '1' else MBASE;
 	SPA_L <= '1' when StkSelA = "01" or (StkSelA = "10" and ADL = '1') or (StkSelA = "00" and L_s = '1') else '0';
 	SPI_L <= '1' when StkSelI = "01" or (StkSelI = "10" and ADL = '1') or (StkSelI = "00" and L_s = '1') else '0';
 	SPcur <= SPL(15 downto 0) when SPA_L = '1' else SP;
@@ -504,6 +506,7 @@ begin
 			WZ <= (others => '0');
 			PCU <= (others => '0'); WZU <= (others => '0'); AU_r <= (others => '0'); -- karabas
 			MBASE <= (others => '0'); SPL <= (others => '0');
+			VecRd <= '0';
 			ADL <= '0'; MADL <= '0'; L_s <= '0'; IL_s <= '0'; Sfx_s <= '0'; ModeB <= '0';
 			IR <= "00000000";
 			ISet <= "00";
@@ -681,8 +684,10 @@ begin
 							-- karabas: the interrupt vector table entry at 00:I:vector
 							A <= I & WZ(7 downto 0);
 							PC <= unsigned(I & WZ(7 downto 0));
-							AU_r <= IU;   -- (CEmu: the table at I << 8 | vector, I 16 bits)
-							PCU <= IU;
+							-- (00:I:vector as the Agon crate; CEmu would take the 16-bit I << 8)
+							AU_r <= (others => '0');
+							PCU <= (others => '0');
+							VecRd <= '1';
 						elsif Ez = '1' and JumpM = '1' then
 							-- karabas: the mixed return: mode 1 -> ADL, the upper byte = DI (00 unless
 							-- ADL or L); mode 0 -> Z80 mode, MBASE, the high byte = DI (read in this
@@ -698,6 +703,7 @@ begin
 								AU_r <= MBASE; PCU <= MBASE; ADL <= '0';
 							end if;
 						elsif Ez = '1' and JumpV = '1' then
+							VecRd <= '0';
 							-- karabas: to the 16-bit handler address, upper 00 in ADL (MBASE in Z80 mode)
 							A(15 downto 8) <= DI_Reg;
 							A(7 downto 0) <= WZ(7 downto 0);
