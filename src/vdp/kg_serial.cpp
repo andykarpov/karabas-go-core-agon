@@ -2,7 +2,7 @@
 // UART0 behind MMIO_EZ_*, DBGSerial (the int constructor) = the debug console. Replaces
 // userspace-platform/HardwareSerial.cpp, whose queues are fed by host threads.
 // The VDP polls in busy loops (wait_eZ80, readBytes): an empty receive yields to the other
-// cooperative tasks, so the loops cannot starve them.
+// cooperative tasks, so the loops cannot starve them; a full one yields every KG_RX_SLICE_US.
 #include "HardwareSerial.h"
 #include "coop.h"
 #include "mmio.h"
@@ -20,11 +20,20 @@ static void kg_rx_pump(rigtorp::SPSCQueue<uint8_t> &q) {
 	}
 }
 
+// The VDP yields only when the input is empty; while the eZ80 keeps it full (the VDP is slower
+// than the UART) the other tasks (audio) would starve: yield at least every KG_RX_SLICE_US.
+#define KG_RX_SLICE_US 1000
+static uint64_t kg_last_yield;
+
 int HardwareSerial::available() {
 	if (m_hacky_debug_output_to_stdout) return 0;
 	kg_rx_pump(m_buf_in);
 	int n = (int)m_buf_in.size();
-	if (!n) coop_yield();
+	uint64_t now = coop_now_us();
+	if (!n || now - kg_last_yield >= KG_RX_SLICE_US) {
+		coop_yield();
+		kg_last_yield = coop_now_us();
+	}
 	return n;
 }
 int HardwareSerial::read() {

@@ -11,8 +11,11 @@ extern "C" {
 typedef void (*coop_fn)(void *arg);
 
 void coop_init(void);
-/* New task, runs fn(arg) on its own stack of stack_bytes; returns its id or -1. */
+/* New task, runs fn(arg) on its own stack of stack_bytes; returns its id (no room: exit 90). */
 int coop_spawn(coop_fn fn, void *arg, uint32_t stack_bytes);
+int coop_spawn_named(coop_fn fn, void *arg, uint32_t stack_bytes, const char *name);
+/* stack high-water marks of the tasks (stacks are filled with a pattern at spawn) */
+void coop_report(void);
 void coop_yield(void);
 void coop_sleep_us(uint64_t us);
 uint64_t coop_now_us(void);

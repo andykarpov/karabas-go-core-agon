@@ -19,3 +19,8 @@
 #define MMIO_SHOT    MMIO_REG(0x54) /* sim only. read: screenshot requests pending; write: (w << 16) | h,
                                        the sim saves the RGB888 picture at SHOT_BASE */
 #define SHOT_BASE    0x11800000u    /* SDRAM, above the firmware region */
+#define MMIO_SIMREQ  MMIO_REG(0x58) /* sim only. read: bit 0 = the sim wants the firmware to report and exit */
+#define MMIO_AUDIO   MMIO_REG(0x5c) /* read: free places in the audio FIFO (8-bit unsigned samples, 16384 Hz);
+                                       write: one sample */
+/* On the board the eZ80 UART RX FIFO level drives CTS to the eZ80 (MOS waits on it); the ISS is a
+   lossless pipe without flow control. */

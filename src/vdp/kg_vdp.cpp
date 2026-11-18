@@ -14,8 +14,9 @@ fabgl::SoundGenerator *getVDPSoundGenerator() {
 
 #include "video/video.ino"
 
-// Simulation only: on a request of the sim (MMIO_SHOT), the screen as RGB888 at SHOT_BASE.
-static void kg_shot_task(void *) {
+// Simulation only: screenshots at the requests of the sim (RGB888 at SHOT_BASE), and at its exit
+// request the stack high-water marks of the tasks, then exit.
+static void kg_sim_task(void *) {
 	for (;;) {
 		if (MMIO_SHOT) {
 			auto lock = fabgl::VGABaseController::acquireLock();
@@ -27,7 +28,26 @@ static void kg_shot_task(void *) {
 				MMIO_SHOT = 0;
 			}
 		}
-		coop_sleep_us(10000);
+		if (MMIO_SIMREQ & 1) {
+			coop_report();
+			fflush(stdout);
+			MMIO_EXIT = 0;
+		}
+		coop_sleep_us(1000);
+	}
+}
+
+// Audio: keep the output FIFO filled from the FabGL sound generator (on the host the emulator
+// pulls getSample(); on the ESP32 the I2S DMA interrupt does it).
+static void kg_audio_task(void *) {
+	for (;;) {
+		uint32_t n = MMIO_AUDIO;
+		if (n) {
+			auto lock = std::unique_lock<std::mutex>(soundGeneratorMutex);
+			auto gen = getVDPSoundGenerator();
+			while (n--) MMIO_AUDIO = gen ? (uint8_t)(gen->getSample() + 127) : 0x80;
+		}
+		coop_sleep_us(2000);
 	}
 }
 
@@ -48,8 +68,9 @@ static void kg_vblank_task(void *) {
 int main() {
 	coop_init();
 	init_userspace_fabgl();
-	coop_spawn(kg_vblank_task, nullptr, 2048);
-	coop_spawn(kg_shot_task, nullptr, 4096);
+	coop_spawn_named(kg_vblank_task, nullptr, 2048, "vblank");
+	coop_spawn_named(kg_sim_task, nullptr, 8192, "sim");
+	coop_spawn_named(kg_audio_task, nullptr, 8192, "audio-out");
 	setup();
 	for (;;) loop();
 }

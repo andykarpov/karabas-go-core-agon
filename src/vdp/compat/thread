@@ -23,7 +23,7 @@ public:
             [f = std::decay_t<F>(std::forward<F>(f)), t = std::make_tuple(std::decay_t<A>(std::forward<A>(a))...)]() mutable {
                 std::apply(f, t);
             });
-        m_id = coop_spawn(&thread::run, fn, KG_THREAD_STACK);
+        m_id = coop_spawn_named(&thread::run, fn, KG_THREAD_STACK, "std::thread");
     }
     thread(const thread &) = delete;
     thread &operator=(const thread &) = delete;
