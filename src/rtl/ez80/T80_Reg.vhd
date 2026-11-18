@@ -91,7 +91,15 @@ entity T80_Reg is
 		DOCL    : out std_logic_vector(7 downto 0);
 		DOR     : out std_logic_vector(127 downto 0);
 		DIRSet  : in  std_logic;
-		DIR     : in  std_logic_vector(127 downto 0)
+		DIR     : in  std_logic_vector(127 downto 0);
+		-- karabas: eZ80 upper bytes (BCU, DEU, HLU, IXU, BCU', DEU', HLU', IYU), written by WEU
+		WEU     : in  std_logic := '0';
+		DIU     : in  std_logic_vector(7 downto 0) := (others => '0');
+		DOAU    : out std_logic_vector(7 downto 0);
+		DOBU    : out std_logic_vector(7 downto 0);
+		DOCU    : out std_logic_vector(7 downto 0);
+		DORU    : out std_logic_vector(63 downto 0);
+		DIRU    : in  std_logic_vector(63 downto 0) := (others => '0')
 	);
 end T80_Reg;
 
@@ -100,6 +108,7 @@ architecture rtl of T80_Reg is
 	type Register_Image is array (natural range <>) of std_logic_vector(7 downto 0);
 	signal RegsH : Register_Image(0 to 7);
 	signal RegsL : Register_Image(0 to 7);
+	signal RegsU : Register_Image(0 to 7); -- karabas: eZ80 upper bytes
 
 begin
 
@@ -130,7 +139,13 @@ begin
 
 				RegsL(7) <= DIR(119 downto 112);
 				RegsH(7) <= DIR(127 downto 120);
+				for i in 0 to 7 loop -- karabas
+					RegsU(i) <= DIRU(i * 8 + 7 downto i * 8);
+				end loop;
 			elsif CEN = '1' then
+				if WEU = '1' then -- karabas
+					RegsU(to_integer(unsigned(AddrA))) <= DIU;
+				end if;
 				if WEH = '1' then
 					RegsH(to_integer(unsigned(AddrA))) <= DIH;
 				end if;
@@ -147,6 +162,11 @@ begin
 	DOBL <= RegsL(to_integer(unsigned(AddrB)));
 	DOCH <= RegsH(to_integer(unsigned(AddrC)));
 	DOCL <= RegsL(to_integer(unsigned(AddrC)));
+	-- karabas: eZ80 upper bytes
+	DOAU <= RegsU(to_integer(unsigned(AddrA)));
+	DOBU <= RegsU(to_integer(unsigned(AddrB)));
+	DOCU <= RegsU(to_integer(unsigned(AddrC)));
+	DORU <= RegsU(7) & RegsU(6) & RegsU(5) & RegsU(4) & RegsU(3) & RegsU(2) & RegsU(1) & RegsU(0);
 	DOR  <= RegsH(7) & RegsL(7) & RegsH(6) & RegsL(6) & RegsH(5) & RegsL(5) & RegsH(4) & RegsL(4) & RegsH(3) & RegsL(3) & RegsH(2) & RegsL(2) & RegsH(1) & RegsL(1) & RegsH(0) & RegsL(0);
 
 end;

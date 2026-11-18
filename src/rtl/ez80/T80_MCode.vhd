@@ -87,10 +87,17 @@ entity T80_MCode is
 		Flag_H : integer := 4;
 		Flag_Y : integer := 5;
 		Flag_Z : integer := 6;
-		Flag_S : integer := 7
+		Flag_S : integer := 7;
+		EZ80   : integer := 0  -- karabas
 	);
 	port(
       IR          : in std_logic_vector(7 downto 0);
+      -- karabas: eZ80 inputs / outputs
+      Lm          : in std_logic := '0';   -- data long of the instruction
+      ILm         : in std_logic := '0';   -- immediate long of the instruction
+      ADLm        : in std_logic := '0';
+      Suffix      : out std_logic;         -- IR is a .SIS / .LIS / .SIL / .LIL suffix
+      EzOp        : out std_logic_vector(3 downto 0); -- eZ80 register operations (see below)
       ISet        : in std_logic_vector(1 downto 0);
       MCycle      : in std_logic_vector(2 downto 0);
       F           : in std_logic_vector(7 downto 0);
@@ -191,7 +198,7 @@ architecture rtl of T80_MCode is
 
 begin
 
-	process (IR, ISet, MCycle, F, NMICycle, IntCycle, XY_State, R800_mode)
+	process (IR, ISet, MCycle, F, NMICycle, IntCycle, XY_State, R800_mode, Lm, ILm, ADLm)
 		variable DDD   : std_logic_vector(2 downto 0);
 		variable SSS   : std_logic_vector(2 downto 0);
 		variable DPair : std_logic_vector(1 downto 0);
@@ -261,6 +268,8 @@ begin
 		No_PC <= '0';
 		XYbit_undoc <= '0';
 		SetWZ <= "00";
+		Suffix <= '0';      -- karabas
+		EzOp <= "0000";
 
 		case ISet is
 		when "00" =>
@@ -2282,6 +2291,58 @@ begin
 					NoRead <= '1';
 				end if;
 			end if;
+		end if;
+
+		-------------------------------------------------------------------------------
+		-- karabas: eZ80 overrides (the last assignment in the process wins). Semantics as
+		-- CEmu core/cpu.c: L = data long, IL = immediate long, from ADL or a suffix.
+		-- EzOp: 0001 STMIX, 0010 RSMIX, 0011 LD MB,A, 0100 LD A,MB
+		-------------------------------------------------------------------------------
+		if EZ80 /= 0 then
+			case ISet is
+			when "00" =>
+				if XY_State = "00" then
+					case IRB is
+					when "01000000"|"01001001"|"01010010"|"01011011" =>
+						-- .SIS / .LIS / .SIL / .LIL: a one-M1 prefix, the core takes L / IL from IR
+						Suffix <= '1';
+						Read_To_Reg <= '0';
+						Set_BusA_To <= "0000";
+						Set_BusB_To <= "0000";
+					when others => null;
+					end case;
+				end if;
+				case IRB is
+				when "11000011" =>
+					-- JP nn: with IL a third address byte, the jump in M4 (WZ = low / high, DI = upper)
+					if ILm = '1' then
+						MCycles <= "100";
+						Jump <= '0';
+						case to_integer(unsigned(MCycle)) is
+						when 2 =>
+							Inc_PC <= '1';
+							LDZ <= '1';
+						when 3 =>
+							Inc_PC <= '1';
+							LDW <= '1';
+						when 4 =>
+							Inc_PC <= '1';
+							Jump <= '1';
+						when others => null;
+						end case;
+					end if;
+				when others => null;
+				end case;
+			when "10" =>
+				case IRB is
+				when "01111101" => EzOp <= "0001";  -- STMIX
+				when "01111110" => EzOp <= "0010";  -- RSMIX
+				when "01101101" => EzOp <= "0011";  -- LD MB,A
+				when "01101110" => EzOp <= "0100";  -- LD A,MB
+				when others => null;
+				end case;
+			when others => null;
+			end case;
 		end if;
 
 	end process;

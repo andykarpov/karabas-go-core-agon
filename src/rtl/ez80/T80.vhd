@@ -86,6 +86,7 @@ entity T80 is
 	generic(
 		Mode   : integer := 0;  -- 0 => Z80, 1 => Fast Z80, 2 => 8080, 3 => GB
 		IOWait : integer := 0;  -- 0 => Single cycle I/O, 1 => Std I/O cycle
+		EZ80   : integer := 0;  -- karabas: 1 => eZ80 (24-bit ADL / Z80 mode, MBASE, suffixes), Mode 0 only
 		Flag_C : integer := 0;
 		Flag_N : integer := 1;
 		Flag_P : integer := 2;
@@ -111,6 +112,7 @@ entity T80 is
 		HALT_n     : out std_logic;
 		BUSAK_n    : out std_logic;
 		A          : out std_logic_vector(15 downto 0);
+		AU         : out std_logic_vector(7 downto 0); -- karabas: eZ80 address bits 23..16
 		DInst      : in  std_logic_vector(7 downto 0);
 		DI         : in  std_logic_vector(7 downto 0);
 		DO         : out std_logic_vector(7 downto 0);
@@ -125,7 +127,10 @@ entity T80 is
 		REG        : out std_logic_vector(211 downto 0); -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 
 		DIRSet     : in  std_logic := '0';
-		DIR        : in  std_logic_vector(211 downto 0) := (others => '0') -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
+		DIR        : in  std_logic_vector(211 downto 0) := (others => '0'); -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
+		-- karabas: eZ80 state (LSB first): PC 24, SPL 24, MBASE, ADL, MADL, L, IL (4 bits), the upper
+		-- bytes of BC, DE, HL, IX, BC', DE', HL', IY (64); REG's SP = SPS
+		REGX       : out std_logic_vector(127 downto 0)
 	);
 end T80;
 
@@ -137,6 +142,22 @@ architecture rtl of T80 is
 	signal I                    : std_logic_vector(7 downto 0);
 	signal R                    : unsigned(7 downto 0);
 	signal SP, PC               : unsigned(15 downto 0);
+	-- karabas: eZ80 state. PC, WZ, A keep their 16 bits; the upper bytes run beside them
+	signal PCU, WZU, AU_r       : std_logic_vector(7 downto 0);
+	signal MBASE                : std_logic_vector(7 downto 0);
+	signal SPL                  : unsigned(23 downto 0);
+	signal ADL, MADL            : std_logic;
+	signal L_s, IL_s            : std_logic;  -- data / immediate long of the instruction
+	signal Ez                   : std_logic;  -- EZ80 generic as a signal
+	signal PCxU                 : std_logic_vector(7 downto 0);  -- upper byte of the fetch address
+	signal SPcur                : unsigned(15 downto 0);         -- low 16 bits of the stack pointer in use
+	signal SPcurU               : std_logic_vector(7 downto 0);  -- its address upper byte
+	signal RegBusAU, RegBusBU, RegBusCU, RegDIU : std_logic_vector(7 downto 0);
+	signal RegWEU               : std_logic;
+	signal DORU                 : std_logic_vector(63 downto 0);
+	signal ID24                 : unsigned(23 downto 0);
+	signal Suffix               : std_logic;
+	signal EzOp                 : std_logic_vector(3 downto 0);
 
 	signal RegDIH               : std_logic_vector(7 downto 0);
 	signal RegDIL               : std_logic_vector(7 downto 0);
@@ -284,6 +305,14 @@ begin
 		end if;
 	end process;
 
+	-- karabas: eZ80 helpers
+	Ez <= '1' when EZ80 /= 0 else '0';
+	PCxU <= PCU when ADL = '1' else MBASE;
+	SPcur <= SPL(15 downto 0) when L_s = '1' else SP;
+	SPcurU <= std_logic_vector(SPL(23 downto 16)) when L_s = '1' else MBASE;
+	AU <= AU_r;
+	REGX <= DORU & "0000" & IL_s & L_s & MADL & ADL & MBASE & std_logic_vector(SPL) & PCxU & std_logic_vector(PC);
+
 	REG <= IntE_FF2 & IntE_FF1 & IStatus & DOR & std_logic_vector(PC) & std_logic_vector(SP) & std_logic_vector(R) & I & Fp & Ap & F & ACC when Alternate = '0'
 			 else IntE_FF2 & IntE_FF1 & IStatus & DOR(127 downto 112) & DOR(47 downto 0) & DOR(63 downto 48) & DOR(111 downto 64) &
 						std_logic_vector(PC) & std_logic_vector(SP) & std_logic_vector(R) & I & Fp & Ap & F & ACC;
@@ -298,9 +327,15 @@ begin
 			Flag_H => Flag_H,
 			Flag_Y => Flag_Y,
 			Flag_Z => Flag_Z,
-			Flag_S => Flag_S)
+			Flag_S => Flag_S,
+			EZ80   => EZ80)
 		port map(
 			IR          => IR,
+			Lm          => L_s,  -- karabas
+			ILm         => IL_s,
+			ADLm        => ADL,
+			Suffix      => Suffix,
+			EzOp        => EzOp,
 			ISet        => ISet,
 			MCycle      => MCycle,
 			F           => F,
@@ -413,6 +448,9 @@ begin
 			PC <= (others => '0');  -- Program Counter
 			A <= (others => '0');
 			WZ <= (others => '0');
+			PCU <= (others => '0'); WZU <= (others => '0'); AU_r <= (others => '0'); -- karabas
+			MBASE <= (others => '0'); SPL <= (others => '0');
+			ADL <= '0'; MADL <= '0'; L_s <= '0'; IL_s <= '0';
 			IR <= "00000000";
 			ISet <= "00";
 			XY_State <= "00";
@@ -504,11 +542,15 @@ begin
 						if Mode < 2 then
 							A(7 downto 0) <= std_logic_vector(R);
 							A(15 downto 8) <= I;
+							AU_r <= (others => '0'); -- karabas: refresh
 							R(6 downto 0) <= R(6 downto 0) + 1;
 						end if;
 
 						if Jump = '0' and Call = '0' and NMICycle = '0' and IntCycle = '0' and not (Halt_FF = '1' or Halt = '1') then
 							PC <= PC + 1;
+							if Ez = '1' and ADL = '1' and PC = x"FFFF" then -- karabas: 24-bit PC in ADL
+								PCU <= std_logic_vector(unsigned(PCU) + 1);
+							end if;
 						end if;
 
 						if IntCycle = '1' and IStatus = "01" then
@@ -525,6 +567,16 @@ begin
 						end if;
 
 						ISet <= "00";
+						-- karabas: L / IL: from a suffix just fetched, else from ADL at a new instruction
+						if Ez = '1' then
+							if Suffix = '1' then
+								L_s <= IR(3);
+								IL_s <= IR(4);
+							elsif Prefix = "00" then
+								L_s <= ADL;
+								IL_s <= ADL;
+							end if;
+						end if;
 						if Prefix /= "00" then
 							if Prefix = "11" then
 								if IR(5) = '1' then
@@ -558,16 +610,44 @@ begin
 					if T_Res = '1' then
 						BTR_r <= (I_BT or I_BC or I_BTR) and not No_BTR;
 						if Jump = '1' then
-							A(15 downto 8) <= DI_Reg;
-							A(7 downto 0) <= WZ(7 downto 0);
-							PC(15 downto 8) <= unsigned(DI_Reg);
-							PC(7 downto 0) <= unsigned(WZ(7 downto 0));
+							if Ez = '1' and IL_s = '1' then
+								-- karabas: 24-bit jump: WZ = low / high, DI = upper; the mode becomes IL
+								A <= WZ;
+								PC <= unsigned(WZ);
+								AU_r <= DI_Reg;
+								PCU <= DI_Reg;
+								ADL <= '1';
+							else
+								A(15 downto 8) <= DI_Reg;
+								A(7 downto 0) <= WZ(7 downto 0);
+								PC(15 downto 8) <= unsigned(DI_Reg);
+								PC(7 downto 0) <= unsigned(WZ(7 downto 0));
+								AU_r <= MBASE;
+								PCU <= MBASE;
+								if Ez = '1' then
+									ADL <= '0';
+								end if;
+							end if;
 						elsif JumpXY = '1' then
 							A <= RegBusC;
 							PC <= unsigned(RegBusC);
+							-- karabas: JP (rr): the mode becomes L
+							if Ez = '1' and L_s = '1' then
+								AU_r <= RegBusCU; PCU <= RegBusCU; ADL <= '1';
+							else
+								AU_r <= MBASE; PCU <= MBASE;
+								if Ez = '1' then ADL <= '0'; end if;
+							end if;
 						elsif Call = '1' or RstP = '1' then
 							A <= WZ;
 							PC <= unsigned(WZ);
+							-- karabas: CALL / RST target (the mixed-mode rules are in the push cycles)
+							if Ez = '1' and IL_s = '1' then
+								AU_r <= WZU; PCU <= WZU; ADL <= '1';
+							else
+								AU_r <= MBASE; PCU <= MBASE;
+								if Ez = '1' then ADL <= '0'; end if;
+							end if;
 						elsif MCycle = MCycles and NMICycle = '1' then
 							A <= "0000000001100110";
 							PC <= "0000000001100110";
@@ -582,11 +662,14 @@ begin
 							when aXY =>
 								if XY_State = "00" then
 									A <= RegBusC;
+									if L_s = '1' then AU_r <= RegBusCU; else AU_r <= MBASE; end if; -- karabas
 								else
 									if NextIs_XY_Fetch = '1' then
 										A <= std_logic_vector(PC);
+										AU_r <= PCxU; -- karabas
 									else
 										A <= WZ;
+										if L_s = '1' then AU_r <= WZU; else AU_r <= MBASE; end if; -- karabas
 									end if;
 								end if;
 							when aIOA =>
@@ -600,9 +683,11 @@ begin
 									A(15 downto 8) <= ACC;
 								end if;
 								A(7 downto 0) <= DI_Reg;
+								AU_r <= (others => '0'); -- karabas: I/O
 								WZ <= (ACC & DI_Reg) + "1";
 							when aSP =>
-								A <= std_logic_vector(SP);
+								A <= std_logic_vector(SPcur); -- karabas: SPL or SPS
+								AU_r <= SPcurU;
 							when aBC =>
 								if Mode = 3 and IORQ_i = '1' then
 									-- Memory map I/O on GBZ80
@@ -610,6 +695,9 @@ begin
 									A(7 downto 0) <= RegBusC(7 downto 0);
 								else
 									A <= RegBusC;
+									-- karabas: (BC) as a port: upper 0; as memory: by L
+									if IORQ_i = '1' then AU_r <= (others => '0');
+									elsif L_s = '1' then AU_r <= RegBusCU; else AU_r <= MBASE; end if;
 									if SetWZ = "01" then
 										WZ <= RegBusC + "1";
 									end if;
@@ -620,6 +708,7 @@ begin
 								end if;
 							when aDE =>
 								A <= RegBusC;
+								if L_s = '1' then AU_r <= RegBusCU; else AU_r <= MBASE; end if; -- karabas
 								if SetWZ = "10" then
 									WZ(7 downto 0) <= RegBusC(7 downto 0) + "1";
 									WZ(15 downto 8) <= ACC;
@@ -627,9 +716,21 @@ begin
 							when aZI =>
 								if Inc_WZ = '1' then
 									A <= std_logic_vector(unsigned(WZ) + 1);
+									-- karabas: the next byte of a (nn) word; nn was 24-bit if IL
+									if L_s = '0' then AU_r <= MBASE;
+									elsif WZ = x"FFFF" then AU_r <= std_logic_vector(unsigned(WZU) + 1);
+									else AU_r <= WZU; end if;
+								elsif Ez = '1' and IL_s = '1' then
+									-- karabas: (nn) with a 24-bit nn: WZ = low / high, DI = upper
+									A <= WZ;
+									if L_s = '1' then AU_r <= DI_Reg; else AU_r <= MBASE; end if;
+									WZU <= DI_Reg;
 								else
 									A(15 downto 8) <= DI_Reg;
 									A(7 downto 0) <= WZ(7 downto 0);
+									-- karabas: a 16-bit nn: upper 00 with L (CEmu cpu_address_mode), else MBASE
+									if L_s = '1' then AU_r <= (others => '0'); else AU_r <= MBASE; end if;
+									WZU <= (others => '0');
 									if SetWZ = "10" then
 										WZ(7 downto 0) <= WZ(7 downto 0) + "1";
 										WZ(15 downto 8) <= ACC;
@@ -641,6 +742,7 @@ begin
 									A <= RegBusA_r;
 								elsif No_PC = '0' or No_BTR = '1' or (I_DJNZ = '1' and IncDecZ = '1') or Mode > 1 then
 									A <= std_logic_vector(PC);
+									AU_r <= PCxU; -- karabas
 								end if;
 							end case;
 						end if;
@@ -715,11 +817,24 @@ begin
 						if JumpE = '1' then
 							PC <= unsigned(signed(PC) + signed(DI_Reg));
 							WZ <= std_logic_vector(signed(PC) + signed(DI_Reg));
+							if Ez = '1' and ADL = '1' then -- karabas: JR / DJNZ in ADL: 24-bit
+								if DI_Reg(7) = '0' and unsigned(PC) + unsigned(DI_Reg) > 16#FFFF# then
+									PCU <= std_logic_vector(unsigned(PCU) + 1);
+								elsif DI_Reg(7) = '1' and unsigned(PC) < unsigned(not DI_Reg) + 1 then
+									PCU <= std_logic_vector(unsigned(PCU) - 1);
+								end if;
+							end if;
 						elsif Inc_PC = '1' then
 							PC <= PC + 1;
+							if Ez = '1' and ADL = '1' and PC = x"FFFF" then -- karabas
+								PCU <= std_logic_vector(unsigned(PCU) + 1);
+							end if;
 						end if;
 						if BTR_r = '1' then
 							PC <= PC - 2;
+							if Ez = '1' and ADL = '1' and PC < 2 then -- karabas
+								PCU <= std_logic_vector(unsigned(PCU) - 1);
+							end if;
 						end if;
 						if RstP = '1' then
 							WZ <= (others =>'0');
@@ -728,6 +843,15 @@ begin
 					end if;
 					if TState = 3 and MCycle = "110" then
 						WZ <= std_logic_vector(signed(RegBusC) + signed(DI_Reg));
+						if Ez = '1' then -- karabas: the upper byte of IX+d / IY+d
+							if DI_Reg(7) = '0' and unsigned(RegBusC) + unsigned(DI_Reg) > 16#FFFF# then
+								WZU <= std_logic_vector(unsigned(RegBusCU) + 1);
+							elsif DI_Reg(7) = '1' and unsigned(RegBusC) < unsigned(not DI_Reg) + 1 then
+								WZU <= std_logic_vector(unsigned(RegBusCU) - 1);
+							else
+								WZU <= RegBusCU;
+							end if;
+						end if;
 					end if;
 
 					if MCycle = "011" and TState = 4 and No_BTR = '0' then
@@ -738,7 +862,13 @@ begin
 
 					if (TState = 2 and Wait_n = '1') or (TState = 4 and MCycle = "001") then
 						if IncDec_16(2 downto 0) = "111" then
-							if IncDec_16(3) = '1' then
+							if Ez = '1' and L_s = '1' then -- karabas: SPL
+								if IncDec_16(3) = '1' then
+									SPL <= SPL - 1;
+								else
+									SPL <= SPL + 1;
+								end if;
+							elsif IncDec_16(3) = '1' then
 								SP <= SP - 1;
 							else
 								SP <= SP + 1;
@@ -752,7 +882,11 @@ begin
 					end if;
 
 					if LDSPHL = '1' then
-						SP <= unsigned(RegBusC);
+						if Ez = '1' and L_s = '1' then -- karabas
+							SPL <= unsigned(RegBusCU & RegBusC);
+						else
+							SP <= unsigned(RegBusC);
+						end if;
 					end if;
 					if ExchangeAF = '1' then
 						Ap <= ACC;
@@ -773,6 +907,14 @@ begin
 						WZ(15 downto 8) <= DI_Reg;
 					end if;
 
+					-- karabas: eZ80 register operations
+					case EzOp is
+					when "0001" => MADL <= '1';      -- STMIX
+					when "0010" => MADL <= '0';      -- RSMIX
+					when "0011" => MBASE <= ACC;     -- LD MB,A
+					when "0100" => ACC <= MBASE;     -- LD A,MB
+					when others => null;
+					end case;
 					if Special_LD(2) = '1' then
 						case Special_LD(1 downto 0) is
 						when "00" =>
@@ -894,9 +1036,11 @@ begin
 					when "10110" =>
 						DO <= Save_Mux;
 					when "11000" =>
-						SP(7 downto 0) <= unsigned(Save_Mux);
+						if Ez = '1' and L_s = '1' then SPL(7 downto 0) <= unsigned(Save_Mux); -- karabas
+						else SP(7 downto 0) <= unsigned(Save_Mux); end if;
 					when "11001" =>
-						SP(15 downto 8) <= unsigned(Save_Mux);
+						if Ez = '1' and L_s = '1' then SPL(15 downto 8) <= unsigned(Save_Mux);
+						else SP(15 downto 8) <= unsigned(Save_Mux); end if;
 					when "11011" =>
 						if Mode = 3 then
 							F(7 downto 4) <= Save_Mux(7 downto 4);
@@ -1065,6 +1209,10 @@ begin
 	end process;
 
 	TmpAddr2 <= std_logic_vector(unsigned(signed(SP) + signed(Save_Mux)));
+	-- karabas: upper register byte writes (filled in by the 24-bit operations)
+	RegWEU <= '0';
+	RegDIU <= (others => '0');
+	ID24 <= (others => '0');
 
 	process (Save_Mux, RegBusB, RegBusA_r, ID16, I_MULU, MULU_Prod32, MULU_tmp, T_Res,
 			ExchangeDH, ExchangeWH, IncDec_16, MCycle, TState, Wait_n, LDHLSP, TmpAddr2, WZ)
@@ -1124,7 +1272,13 @@ begin
 			DOCL => RegBusC(7 downto 0),
 			DOR  => DOR,
 			DIRSet => DIRSet,
-			DIR  => DIR(207 downto 80));
+			DIR  => DIR(207 downto 80),
+			WEU  => RegWEU, -- karabas
+			DIU  => RegDIU,
+			DOAU => RegBusAU,
+			DOBU => RegBusBU,
+			DOCU => RegBusCU,
+			DORU => DORU);
 
 ---------------------------------------------------------------------------
 --
@@ -1237,7 +1391,7 @@ begin
 	--   SetEI = '1'     EI sets IFF1/IFF2 on this T2 enable, too late for REG
 	--   IntCycle/NMICycle  interrupt acknowledge, not an instruction start
 	-- RETN needs no exclusion: I_RETN is decoded in its own M3.
-	InsnStart <= '1' when MCycle = "001" and TState = 2 and Prefix = "00" and
+	InsnStart <= '1' when MCycle = "001" and TState = 2 and Prefix = "00" and Suffix = '0' and
 	                      SetEI = '0' and IntCycle = '0' and NMICycle = '0' else '0';
 -------------------------------------------------------------------------
 --
@@ -1338,11 +1492,11 @@ begin
 									MCycle <= "001";
 									IntCycle <= '0';
 									NMICycle <= '0';
-									if NMI_s = '1' and Prefix = "00" then
+									if NMI_s = '1' and Prefix = "00" and Suffix = '0' then
 										NMI_s    <= '0';
 										NMICycle <= '1';
 										IntE_FF1 <= '0';
-									elsif IntE_FF1 = '1' and IntDecision_n='0' and Prefix = "00" and SetEI = '0' then
+									elsif IntE_FF1 = '1' and IntDecision_n='0' and Prefix = "00" and Suffix = '0' and SetEI = '0' then
 										IntCycle <= '1';
 										IntE_FF1 <= '0';
 										IntE_FF2 <= '0';

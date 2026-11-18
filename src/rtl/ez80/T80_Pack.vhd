@@ -72,6 +72,7 @@ package T80_Pack is
 	generic(
 		Mode : integer := 0;    -- 0 => Z80, 1 => Fast Z80, 2 => 8080, 3 => GB
 		IOWait : integer := 0;  -- 1 => Single cycle I/O, 1 => Std I/O cycle
+		EZ80   : integer := 0;  -- karabas: 1 => eZ80
 		Flag_C : integer := 0;
 		Flag_N : integer := 1;
 		Flag_P : integer := 2;
@@ -97,6 +98,7 @@ package T80_Pack is
 		HALT_n          : out std_logic;
 		BUSAK_n         : out std_logic;
 		A               : out std_logic_vector(15 downto 0);
+		AU              : out std_logic_vector(7 downto 0); -- karabas
 		DInst           : in std_logic_vector(7 downto 0);
 		DI              : in std_logic_vector(7 downto 0);
 		DO              : out std_logic_vector(7 downto 0);
@@ -110,7 +112,8 @@ package T80_Pack is
 		out0            : in  std_logic := '0';  -- 0 => OUT(C),0, 1 => OUT(C),255
 		REG             : out std_logic_vector(211 downto 0); -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 		DIRSet          : in  std_logic := '0';
-		DIR             : in  std_logic_vector(211 downto 0) := (others => '0') -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
+		DIR             : in  std_logic_vector(211 downto 0) := (others => '0'); -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
+		REGX            : out std_logic_vector(127 downto 0) -- karabas: eZ80 state, see T80.vhd
 	);
 	end component;
 
@@ -133,7 +136,14 @@ package T80_Pack is
 		DOCL            : out std_logic_vector(7 downto 0);
 		DOR             : out std_logic_vector(127 downto 0);
 		DIRSet          : in  std_logic;
-		DIR             : in  std_logic_vector(127 downto 0)
+		DIR             : in  std_logic_vector(127 downto 0);
+		WEU             : in  std_logic := '0'; -- karabas: eZ80 upper bytes
+		DIU             : in  std_logic_vector(7 downto 0) := (others => '0');
+		DOAU            : out std_logic_vector(7 downto 0);
+		DOBU            : out std_logic_vector(7 downto 0);
+		DOCU            : out std_logic_vector(7 downto 0);
+		DORU            : out std_logic_vector(63 downto 0);
+		DIRU            : in  std_logic_vector(63 downto 0) := (others => '0')
 	);
 	end component;
 
@@ -147,10 +157,16 @@ package T80_Pack is
 		Flag_H : integer := 4;
 		Flag_Y : integer := 5;
 		Flag_Z : integer := 6;
-		Flag_S : integer := 7
+		Flag_S : integer := 7;
+		EZ80   : integer := 0  -- karabas
 	);
 	port(
 		IR                      : in  std_logic_vector(7 downto 0);
+		Lm                      : in  std_logic := '0'; -- karabas: eZ80
+		ILm                     : in  std_logic := '0';
+		ADLm                    : in  std_logic := '0';
+		Suffix                  : out std_logic;
+		EzOp                    : out std_logic_vector(3 downto 0);
 		ISet                    : in  std_logic_vector(1 downto 0);
 		MCycle                  : in  std_logic_vector(2 downto 0);
 		F                       : in  std_logic_vector(7 downto 0);

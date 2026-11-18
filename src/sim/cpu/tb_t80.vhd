@@ -7,6 +7,7 @@ use IEEE.std_logic_1164.all;
 use work.T80_Pack.all;
 
 entity tb_t80 is
+	generic(EZ80 : integer := 0);
 	port(
 		clk     : in  std_logic;
 		reset_n : in  std_logic;
@@ -14,6 +15,7 @@ entity tb_t80 is
 		nmi_n   : in  std_logic;
 		di      : in  std_logic_vector(7 downto 0);
 		a       : out std_logic_vector(15 downto 0);
+		au      : out std_logic_vector(7 downto 0);
 		dout    : out std_logic_vector(7 downto 0);
 		m1_n    : out std_logic;
 		mreq_n  : out std_logic;
@@ -22,7 +24,8 @@ entity tb_t80 is
 		wr_n    : out std_logic;
 		halt_n  : out std_logic;
 		insn    : out std_logic;
-		regs    : out std_logic_vector(211 downto 0)
+		regs    : out std_logic_vector(211 downto 0);
+		regx    : out std_logic_vector(127 downto 0)
 	);
 end tb_t80;
 
@@ -36,13 +39,13 @@ architecture rtl of tb_t80 is
 	signal TState     : std_logic_vector(2 downto 0);
 begin
 	u0 : T80
-		generic map(Mode => 0, IOWait => 1)
+		generic map(Mode => 0, IOWait => 1, EZ80 => EZ80)
 		port map(
 			CEN => '1', M1_n => m1_n, IORQ => IORQ, NoRead => NoRead, Write => Write, RFSH_n => open,
 			HALT_n => halt_n, WAIT_n => '1', INT_n => int_n, NMI_n => nmi_n, RESET_n => reset_n,
-			BUSRQ_n => '1', BUSAK_n => open, CLK_n => clk, A => a, DInst => di, DI => DI_Reg, DO => dout,
+			BUSRQ_n => '1', BUSAK_n => open, CLK_n => clk, A => a, AU => au, DInst => di, DI => DI_Reg, DO => dout,
 			MC => MCycle, TS => TState, IntCycle_n => IntCycle_n, IntE => open, Stop => open,
-			InsnStart => insn, REG => regs);
+			InsnStart => insn, REG => regs, REGX => regx);
 
 	-- the bus process of T80s (T2Write = 0)
 	process (reset_n, clk)

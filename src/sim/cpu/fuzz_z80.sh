@@ -11,7 +11,7 @@ make -s -C ../../oracle
 W=$(mktemp -d)
 trap 'rm -rf -- "$W"' EXIT
 printf '\x00' > "$W/p.bin"
-./run.sh --mem /dev/null --trace /dev/null >/dev/null 2>&1 || true   # build only
+./run.sh --mem /dev/null --trace /dev/null >/dev/null 2>&1 || [ -x build/obj/Vtb_t80 ] && [ -z "$(find ../../rtl/ez80 tb_t80.vhd tb_cpu.cpp -newer build/obj/Vtb_t80)" ] || { echo "build failed: run ./run.sh"; exit 1; }
 pass=0; fail=0
 for s in $(seq 1 "$N"); do
 	$OR --z80 "$W/p.bin" --fill "$s" --n "$I" --trace "$W/t.txt" --mem-out "$W/m.bin"
