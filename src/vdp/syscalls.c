@@ -56,12 +56,15 @@ void _exit(int code) {
 void *__dso_handle = &__dso_handle;
 
 /* rv32im has no A extension and libatomic is not in the toolchain: one core, cooperative tasks,
-   so a plain read-compare-write is atomic enough (no interrupt handler touches these objects) */
+   so a plain read-compare-write is atomic enough (no interrupt handler touches these objects).
+   A failed exchange is a spin loop waiting for another task (vdp-gl waitVblank): yield to it. */
+#include "coop.h"
 _Bool __atomic_compare_exchange_1(volatile void *p, void *expected, unsigned char desired, _Bool weak, int s, int f) {
     (void)weak; (void)s; (void)f;
     volatile unsigned char *v = p;
     unsigned char *e = expected;
     if (*v == *e) { *v = desired; return 1; }
     *e = *v;
+    coop_yield();
     return 0;
 }

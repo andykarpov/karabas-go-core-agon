@@ -31,10 +31,24 @@ static void kg_shot_task(void *) {
 	}
 }
 
+// vblank of the video output -> vdp-gl (on the host: signal_vblank() of rust_glue.cpp)
+static void kg_vblank_task(void *) {
+	uint32_t last = MMIO_FRAME;
+	for (;;) {
+		uint32_t f = MMIO_FRAME;
+		if (f != last) {
+			last = f;
+			fabgl::BaseDisplayController::vblankSignal.store(true);
+		}
+		coop_yield();
+	}
+}
+
 // Serial2 (the eZ80 UART0) talks to MMIO directly: kg_serial.cpp
 int main() {
 	coop_init();
 	init_userspace_fabgl();
+	coop_spawn(kg_vblank_task, nullptr, 2048);
 	coop_spawn(kg_shot_task, nullptr, 4096);
 	setup();
 	for (;;) loop();

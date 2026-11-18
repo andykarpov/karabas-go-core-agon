@@ -10,6 +10,7 @@
 #define MMIO_CYCLES  MMIO_REG(0x0c) /* read: clock cycles (ISS: instructions), low 32 bits */
 #define MMIO_US_LO   MMIO_REG(0x10) /* read: microsecond counter, low 32 bits */
 #define MMIO_US_HI   MMIO_REG(0x14) /* read: microsecond counter, high 32 bits */
+#define MMIO_FRAME   MMIO_REG(0x18) /* read: frame counter of the video output (+1 at each vblank) */
 #define MMIO_MS      MMIO_REG(0x1c) /* read: milliseconds */
 #define MMIO_EZ_RX   MMIO_REG(0x40) /* read: byte from the eZ80 UART0, bit 8 = valid (pops it) */
 #define MMIO_EZ_TX   MMIO_REG(0x44) /* write: byte to the eZ80 UART0 */

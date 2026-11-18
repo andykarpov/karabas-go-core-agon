@@ -97,6 +97,7 @@ int main(int argc, char **argv) {
             case 0x0c: return (uint32_t)ninstr;
             case 0x10: return (uint32_t)(ninstr / ipu);
             case 0x14: return (uint32_t)((ninstr / ipu) >> 32);
+            case 0x18: return (uint32_t)(ninstr / ipu / 16667);   // 60 Hz frames
             case 0x1c: return (uint32_t)(ninstr / ipu / 1000);
             case 0x54: {
                 uint32_t k = 0;
