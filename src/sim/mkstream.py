@@ -3,7 +3,7 @@
 
 Each stream = the boot handshake (VDU 23,0,&80: general poll) + a workload + a general poll with a
 tag, so the VDP reply "80 01 <tag>" in the ISS TX log marks the end of the work.
-usage: mkstream.py [--nocursor] <name> <out.bin>   names: see WORK
+usage: mkstream.py [--nocursor] [--settle] <name> <out.bin>   names: see WORK
 """
 import struct
 import sys
@@ -76,6 +76,20 @@ def sprites(nspr, steps):
     return bytes(out)
 
 
+def hwsprites(nspr, steps, wx, wy):
+    # the same with hardware sprites (test flag 2 = VDU 23,0,&F8,2;1;, then VDU 23,27,19 per sprite):
+    # drawn by the scanout over the frame; positions from -8 for the clipping at the edges
+    out = bytearray(vdu(23, 0, 0xf8) + w(2) + w(1) + bitmap_def(0, 16, 16) + bitmap_def(1, 16, 16))
+    for i in range(nspr):
+        out += vdu(23, 27, 4, i) + vdu(23, 27, 5) + vdu(23, 27, 6, 0) + vdu(23, 27, 6, 1) + vdu(23, 27, 19) + vdu(23, 27, 11)
+    out += vdu(23, 27, 7, nspr)
+    for t in range(steps):
+        for i in range(nspr):
+            out += vdu(23, 27, 4, i) + vdu(23, 27, 13) + w((i * 37 + t * 4) % wx - 8) + w((i * 23 + t * 3) % wy - 8) + vdu(23, 27, 8)
+        out += vdu(23, 27, 15)
+    return bytes(out)
+
+
 def note(ch, vol, freq, ms):      # VDU 23,0,&85,ch,0 (play),vol,freq;duration;
     return vdu(23, 0, 0x85, ch, 0, vol) + w(freq) + w(ms)
 
@@ -113,6 +127,12 @@ WORK = {
     'gtext8': lambda: gtext(8, b'Agon!'),
     # 16 sprites of 16x16 (2 frames), 60 refreshes, mode 8
     'sprites8': lambda: mode(8) + sprites(16, 60),
+    # hardware sprites (the scanout overlay), mode 8 (320x240 64 colours) and mode 0 (640x480 16)
+    'hwspr8': lambda: mode(8) + text(300) + hwsprites(16, 10, 330, 250),
+    'hwspr0': lambda: mode(0) + text(300) + hwsprites(16, 10, 650, 490),
+    # some text with the text cursor on (run without --nocursor: an XOR RGBA2222 sprite), steady
+    # (back over the last character: VDU 8; then VDU 23,0,&0A,0 no blink + VDU 23,1,1 on: in the screenshot)
+    'cursor0': lambda: mode(0) + text(300) + vdu(8) + vdu(23, 0, 0x0a, 0) + vdu(23, 1, 1, 0, 0, 0, 0, 0, 0, 0),
     # text0 while 3 channels play 4 s notes (audio cost = textaudio - text0)
     'textaudio': lambda: mode(0) + note(0, 100, 440, 4000) + note(1, 100, 554, 4000) + note(2, 100, 659, 4000) + text(8192),
 }
@@ -124,7 +144,10 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     name, out = args[0], args[1]
     pre = vdu(23, 1, 0, 0, 0, 0, 0, 0, 0, 0) if '--nocursor' in sys.argv else b''
-    data = gp(0x55) + pre + WORK[name]() + gp(0xaa)
+    # --settle: 6000 VDU 0 (nothing) at the end: at the real rate ~50 ms = 3 vblanks, so the frame
+    # description of the last vblank is the picture of the screenshot (sprites moved after it otherwise)
+    post = bytes(6000) if '--settle' in sys.argv else b''
+    data = gp(0x55) + pre + WORK[name]() + post + gp(0xaa)
     with open(out, 'wb') as f:
         f.write(data)
 

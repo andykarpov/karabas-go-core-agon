@@ -100,7 +100,8 @@ int main(int argc, char **argv) {
 		if (in_start >= 0 && ps2_pos < ps2.size() && cyc >= (uint64_t)in_start + 15000000 && cyc % 75000 == 0) {
 			t->ps2_code = ps2[ps2_pos++]; t->ps2_wr = 1;
 		}
-		t->sim_shot_req = shot_asked;
+		// (env SHOT_DELAY us: the screenshot that long after DONE, e.g. for the text cursor shown when idle)
+		t->sim_shot_req = shot_asked && cyc >= done_cyc + (uint64_t)(getenv("SHOT_DELAY") ? atof(getenv("SHOT_DELAY")) * clk_per_us : 0);
 
 		t->clk = 0; t->eval();
 		// the bytes to the eZ80 (taken at this edge)

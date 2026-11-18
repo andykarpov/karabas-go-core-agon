@@ -14,7 +14,7 @@
  The .kg ROMs: MOS at 0 (-> the SRAM flash area), the VDP firmware at 0x1000000 (-> SDRAM 0).
  SD2 = the SD card of MOS, driven by the eZ80 SPI (PB4 = /CS).
  The keyboard: the PS/2 set 2 bytes of kg_mcu2 to the VDP (MMIO KBD, the firmware injects them into
- vdp-gl). Not yet: the mouse, the sound out, sprites (docs/PLAN.md).
+ vdp-gl), the mouse (MS_* -> vdp_soc MOUSE -> vdp-gl). Not yet: the sound out (docs/PLAN.md).
 
  Soft switches (the index of the item in the osd of core.json): 0 Reset.
 */
@@ -188,7 +188,7 @@ wire [7:0] ps2_code;
 wire ps2_kind, ps2_wr;
 wire kbd_wr;
 wire [15:0] joy_l, joy_r;
-wire [7:0] ms_x, ms_y, ms_b;
+wire [7:0] ms_x, ms_y, ms_z, ms_b;
 wire ms_wr;
 wire [1:0] ld_kind;
 wire [7:0] ld_slot, ld_data;
@@ -240,7 +240,7 @@ kg_mcu2 #(
 
 	.KBD(kbd), .KBD_WR(kbd_wr),
 	.PS2_CODE(ps2_code), .PS2_KIND(ps2_kind), .PS2_WR(ps2_wr),
-	.MS_X(ms_x), .MS_Y(ms_y), .MS_Z(), .MS_B(ms_b), .MS_WR(ms_wr),
+	.MS_X(ms_x), .MS_Y(ms_y), .MS_Z(ms_z), .MS_B(ms_b), .MS_WR(ms_wr),
 	.JOY_L(joy_l), .JOY_R(joy_r), .JOY_WR(),
 	.PS2_CMD(16'h0000), .PS2_CMD_WR(1'b0),
 
@@ -374,6 +374,7 @@ vdp_soc vdp (
 	.clk_pix(clk_pix), .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b), .vid_hs(vid_hs), .vid_vs(vid_vs),
 	.vid_de(vid_de), .vblank(v_vblank),
 	.ps2_code(ps2_code), .ps2_wr(ps2_wr & ~ps2_kind),
+	.ms_x(ms_x), .ms_y(ms_y), .ms_z(ms_z), .ms_b(ms_b), .ms_wr(ms_wr),
 	.aud_ce(aud_ce), .aud_out(aud_out), .sim_shot_req(1'b0), .sim_req(1'b0), .sim_shot_wr(), .sim_shot(),
 	.dbg_con_wr(vdp_con_wr), .dbg_con(vdp_con), .dbg_exit(vdp_exit), .dbg_mark_wr(), .dbg_mark(),
 	.cpu_run(vdp_run), .dbg_rx_poll(), .dbg_iadr(), .dbg_io(), .dbg_bus(),

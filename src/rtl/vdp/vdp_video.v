@@ -12,6 +12,12 @@
  made in line buffer (line & 1): its row address (d[2] + 4 y), its palette (d[3] byte y; the 16
  bytes of d[4] + 16 p when p changes), its bytes (32-byte bursts from the 32-byte line of the row
  address, into the raw buffer), then the pixels decoded (formats of kg_scanout.cpp) into RGB222.
+ Then the sprites of the line (d[5], read into a table of 32 at the frame start; kg_scanout.cpp:
+ the text cursor, hardware sprites, the mouse cursor, as vdp-gl drawSpriteScanLine): for each one
+ on the line its pixels (RGBA2222 / RGBA8888, 32-byte bursts into raw[]) over the line buffer where
+ alpha is not 0 (RGBA2222 XOR: the colour XORed into it), clipped to the source width; RGBA8888
+ rows over 256 pixels are cut there. A new line to make stops the sprites (the rest of them lost
+ on that line: a late line would be worse).
  Memory port: a wishbone master as the VexRiscv buses (CTI 010 = more words of the burst).
  clk_pix side: the counters, the line buffer read (with the doubling), the syncs (high active),
  de. The geometry is quasi static: made in the vertical blank, read in the picture.
@@ -63,9 +69,12 @@ reg [31:0] rows_a = 32'd0, rowpal_a = 32'd0, pals_a = 32'd0;
 
 reg [5:0] lb [0:2047];                 // { buffer, x[9:0] }: two lines of up to 1024 RGB222 pixels
 reg [10:0] lb_wa = 11'd0;
-reg [5:0] lb_wd = 6'd0;
+reg [5:0] lb_wd = 6'd0, lb_q = 6'd0;
 reg lb_we = 1'b0;
-always @(posedge clk) if (lb_we) lb[lb_wa] <= lb_wd;
+always @(posedge clk) begin
+	if (lb_we) lb[lb_wa] <= lb_wd;
+	lb_q <= lb[lb_wa];                 // (the sprites XOR: read through the same port)
+end
 
 // ------------------------------------------------------------------ clk_pix: the picture
 
@@ -103,7 +112,8 @@ assign vblank_sys = vc_s >= 10'd480;
 // ------------------------------------------------------------------ clk: the fetch engine
 
 localparam [3:0] S_IDLE = 4'd0, S_DESC = 4'd1, S_GEOM = 4'd2, S_ROW = 4'd3, S_RPAL = 4'd4, S_PAL = 4'd5,
-	S_RAW = 4'd6, S_DEC = 4'd7, S_DEC2 = 4'd8;
+	S_RAW = 4'd6, S_DEC = 4'd7, S_DEC2 = 4'd8, S_SLIST = 4'd9, S_SPR = 4'd10, S_SPH = 4'd11,
+	S_SPM = 4'd12, S_SPF = 4'd13, S_SPX = 4'd14, S_SPW = 4'd15;
 reg [3:0] st = S_IDLE;
 reg [2:0] n = 3'd0;                    // words of the current access
 reg [31:0] d0 = 32'd0;
@@ -121,6 +131,35 @@ reg [11:0] boff = 12'd0;               // byte offset of the row in raw[] (row_a
 reg pend = 1'b0;                       // a line to make (pend_line)
 reg [10:0] pend_line = 11'd0;
 reg frame_pend = 1'b0;
+
+// the sprites: the table (4 words each: xy, wh, address, flags), read at the frame start
+reg [31:0] spr_a = 32'd0;
+reg [31:0] stbl [0:127];
+reg [6:0] st_wa = 7'd0, st_ra = 7'd0;
+reg [31:0] st_q = 32'd0;
+reg st_we = 1'b0;
+reg [31:0] st_wd = 32'd0;
+always @(posedge clk) begin
+	if (st_we) stbl[st_wa] <= st_wd;
+	st_q <= stbl[st_ra];
+end
+reg [5:0] ns = 6'd0;                   // sprites in the table
+reg [7:0] sl_n = 8'd0;                 // S_SLIST: words read
+reg [4:0] si = 5'd0;                   // the sprite of the line
+reg [2:0] sk = 3'd0;                   // S_SPR: words of its entry
+reg signed [16:0] s_x = 17'sd0, s_y = 17'sd0;
+reg [15:0] s_w = 16'd0, s_h = 16'd0;
+reg [31:0] s_da = 32'd0;
+reg [1:0] s_fl = 2'd0;                 // bit 0 RGBA8888, bit 1 XOR
+reg [15:0] s_oy = 16'd0, s_ox = 16'd0; // the first pixel of the sprite on the line
+reg [10:0] s_xs = 11'd0, s_dw = 11'd0, s_p = 11'd0;   // its screen x, the pixels, the pixel
+reg [31:0] s_prod = 32'd0;
+reg [31:0] sw0 = 32'd0;                // the raw word of the pixel (S_SPW)
+wire [11:0] s_ba = boff + (s_fl[0] ? { s_p[9:0], 2'b00 } : { 1'b0, s_p });
+wire [7:0] s_b8 = sw0 >> { s_ba[1:0], 3'b000 };
+wire s_on = s_fl[0] ? sw0[31:24] != 8'd0 : s_b8[7:6] != 2'd0;
+wire [5:0] s_rgb = s_fl[0] ? { sw0[23:22], sw0[15:14], sw0[7:6] } : s_b8[5:0];
+wire s_stop = pend || frame_pend;      // a new line to make (or the frame): the sprites stop
 
 // the next row: does it start a source line?
 wire [10:0] nvc = (vc == 10'd524) ? 11'd0 : { 1'b0, vc } + 11'd1;   // (valid at row_start)
@@ -157,6 +196,7 @@ end
 
 always @(posedge clk) begin
 	lb_we <= 1'b0;
+	st_we <= 1'b0;
 	if (row_start) begin
 		if (vc == 10'd480 && scan_adr != 32'd0) frame_pend <= 1'b1;     // row 480 starts: the description
 		if (n_new && fmt != 4'd0) begin pend <= 1'b1; pend_line <= n_line; end
@@ -181,11 +221,29 @@ always @(posedge clk) begin
 			3'd1: sh <= m_dat[10:0];
 			3'd2: rows_a <= m_dat;
 			3'd3: rowpal_a <= m_dat;
-			default: pals_a <= m_dat;
+			3'd4: pals_a <= m_dat;
+			default: spr_a <= m_dat;
 			endcase
 			n <= n + 3'd1;
 			m_adr <= m_adr + 30'd1;
-			if (n == 3'd4) begin m_cyc <= 1'b0; st <= S_GEOM; end
+			if (n == 3'd5) begin
+				// the sprite list: its count, then the table
+				ns <= 6'd0; sl_n <= 8'd0;
+				if (m_dat == 32'd0) begin m_cyc <= 1'b0; st <= S_GEOM; end
+				else begin m_adr <= m_dat[31:2]; st <= S_SLIST; end
+			end
+		end
+	S_SLIST:
+		if (m_ack) begin
+			sl_n <= sl_n + 8'd1;
+			m_adr <= m_adr + 30'd1;
+			if (sl_n == 8'd0) begin
+				ns <= m_dat > 32'd32 ? 6'd32 : m_dat[5:0];
+				if (m_dat == 32'd0) begin m_cyc <= 1'b0; st <= S_GEOM; end
+			end else begin
+				st_we <= 1'b1; st_wa <= sl_n[6:0] - 7'd1; st_wd <= m_dat;
+				if (sl_n == { ns, 2'b00 }) begin m_cyc <= 1'b0; st <= S_GEOM; end
+			end
 		end
 	S_GEOM: begin
 		fmt <= (d0[3:0] >= 4'd1 && d0[3:0] <= 4'd4) || d0[3:0] == 4'd6 ? d0[3:0] : 4'd0;
@@ -275,8 +333,96 @@ always @(posedge clk) begin
 		lb_we <= 1'b1;
 		lb_wa <= { line[0], x[9:0] };
 		lb_wd <= fmt == 4'd6 ? v24[5:0] : pal[idx];
-		if (x + 11'd1 >= sw) st <= S_IDLE;
-		else begin x <= x + 11'd1; st <= S_DEC; end
+		if (x + 11'd1 >= sw) begin
+			si <= 5'd0; sk <= 3'd0; st_ra <= 7'd0;
+			st <= ns != 6'd0 ? S_SPR : S_IDLE;
+		end else begin x <= x + 11'd1; st <= S_DEC; end
+	end
+	// ---- the sprites of the line
+	S_SPR: begin
+		// the entry of sprite si: st_ra runs ahead, st_q a clock later
+		sk <= sk + 3'd1;
+		st_ra <= { si, 2'b00 } + { 4'd0, sk } + 7'd1;
+		case (sk)
+		3'd1: begin s_x <= { st_q[15], st_q[15:0] }; s_y <= { st_q[31], st_q[31:16] }; end
+		3'd2: begin s_w <= st_q[15:0]; s_h <= st_q[31:16]; end
+		3'd3: s_da <= st_q;
+		3'd4: begin s_fl <= st_q[1:0]; st <= S_SPH; end
+		default: ;
+		endcase
+	end
+	S_SPH: begin
+		// on this line? (vdp-gl rawDrawSpriteScanline)
+		begin : hit
+			reg signed [17:0] oy, xe;
+			oy = $signed({ 7'd0, line }) - s_y;
+			xe = s_x + $signed({ 1'b0, s_w });
+			if (oy >= 0 && oy < $signed({ 2'b00, s_h }) && s_x < $signed({ 6'd0, sw }) && xe > 0 && s_w != 16'd0) begin
+				s_oy <= oy[15:0];
+				s_ox <= s_x < 0 ? -s_x[15:0] : 16'd0;
+				s_xs <= s_x < 0 ? 11'd0 : s_x[10:0];
+				s_dw <= xe > $signed({ 6'd0, sw }) ? (s_x < 0 ? sw : sw - s_x[10:0]) : s_w[10:0] - (s_x < 0 ? -s_x[10:0] : 11'd0);
+				st <= S_SPM;
+			end else
+				st <= S_SPX;
+		end
+	end
+	S_SPM: begin
+		s_prod <= s_oy * s_w + { 16'd0, s_ox };
+		if (s_fl[0] && s_dw > 11'd256) s_dw <= 11'd256;    // raw[] holds 1088 bytes
+		st <= S_SPF; n <= 3'd7;                             // (n 7: start the bursts)
+	end
+	S_SPF:
+		if (n == 3'd7 && !m_cyc) begin
+			// start: the bytes s_da + (s_prod << bpp) .. + (s_dw << bpp)
+			begin : sa
+				reg [31:0] a;
+				a = s_da + (s_fl[0] ? { s_prod[29:0], 2'b00 } : s_prod);
+				m_cyc <= 1'b1; m_adr <= { a[31:5], 3'b000 }; m_cti <= 3'b010; n <= 3'd0; raw_wa <= 9'd0;
+				fetch_a <= { a[31:5], 5'd0 };
+				fetch_end <= a + (s_fl[0] ? { 19'd0, s_dw, 2'b00 } : { 21'd0, s_dw });
+				boff <= { 7'd0, a[4:0] };
+			end
+		end else if (m_ack) begin
+			raw[raw_wa] <= m_dat;
+			raw_wa <= raw_wa + 9'd1;
+			n <= n + 3'd1;
+			m_adr <= m_adr + 30'd1;
+			if (n == 3'd6) m_cti <= 3'b111;
+			if (n == 3'd7) begin
+				fetch_a <= fetch_a + 32'd32;
+				m_cti <= 3'b010;
+				if (fetch_a + 32'd32 >= fetch_end) begin
+					m_cyc <= 1'b0; s_p <= 11'd0; x <= 11'd0; st <= S_SPW;
+				end
+			end
+		end
+	S_SPW: begin
+		// a pixel in 3 clocks (x: 0 address, 1 the reads, 2 the write)
+		x <= x + 11'd1;
+		case (x[1:0])
+		2'd0: begin
+			if (s_stop) st <= S_IDLE;
+			sw0 <= raw[s_ba >> 2];
+			lb_wa <= { line[0], s_xs[9:0] + s_p[9:0] };
+		end
+		2'd1: ;
+		default: begin
+			x <= 11'd0;
+			if (s_on) begin
+				lb_we <= 1'b1;
+				lb_wd <= s_fl[1] ? lb_q ^ s_rgb : s_rgb;
+			end
+			s_p <= s_p + 11'd1;
+			if (s_p + 11'd1 >= s_dw) st <= S_SPX;
+		end
+		endcase
+	end
+	S_SPX: begin
+		// the next sprite
+		sk <= 3'd0; st_ra <= { si + 5'd1, 2'b00 };
+		si <= si + 5'd1;
+		st <= (s_stop || { 1'b0, si } + 6'd1 >= ns) ? S_IDLE : S_SPR;
 	end
 	default: st <= S_IDLE;
 	endcase

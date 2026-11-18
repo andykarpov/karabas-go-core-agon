@@ -24,11 +24,12 @@
 #include "kg_scanout.h"
 
 namespace {
-const int MAXH = 1024, MAXPAL = 64;
+const int MAXH = 1024, MAXPAL = 64, MAXSPR = 32;
 struct Desc {
-	uint32_t d[5];
+	uint32_t d[6];
 	uint8_t rowpal[MAXH];
 	uint8_t pal[MAXPAL][16];
+	uint32_t spr[1 + 4 * MAXSPR];
 };
 Desc desc[2];
 int cur = 0;
@@ -43,11 +44,28 @@ uint8_t colour_of(fabgl::NativePixelFormat f, void *signals, int i) {
 	default: return 0;
 	}
 }
+
+// one sprite of the list, the way rawDrawSpriteScanline() draws it
+void add_sprite(uint32_t *l, fabgl::Sprite *s) {
+	if (!s || l[0] >= (uint32_t)MAXSPR) return;
+	auto *f = s->getFrame();
+	if (!f || !f->data || f->width <= 0 || f->height <= 0) return;
+	int fm = f->format == fabgl::PixelFormat::RGBA2222 ? 0 : f->format == fabgl::PixelFormat::RGBA8888 ? 1 : -1;
+	if (fm < 0) return;
+	bool x = fm == 0 && s->paintOptions.mode == fabgl::PaintMode::XOR;
+	uint32_t *e = &l[1 + 4 * l[0]++];
+	e[0] = (uint32_t)(uint16_t)s->x | (uint32_t)(uint16_t)s->y << 16;
+	e[1] = (uint32_t)(uint16_t)f->width | (uint32_t)(uint16_t)f->height << 16;
+	e[2] = (uint32_t)(uintptr_t)f->data;
+	e[3] = (uint32_t)fm | (x ? 2u : 0u);
+}
 }
 
 void kg_scanout_publish() {
 	auto *vga = fabgl::VGABaseController::activeController;
 	Desc &o = desc[cur ^ 1];
+	o.spr[0] = 0;
+	o.d[5] = (uint32_t)(uintptr_t)o.spr;
 	if (!vga || !vga->is_started()) {
 		o.d[0] = 0;
 	} else {
@@ -73,6 +91,18 @@ void kg_scanout_publish() {
 				for (; y < end && y < h; y++) o.rowpal[y] = (uint8_t)n;
 			}
 			for (; y < h; y++) o.rowpal[y] = (uint8_t)(n ? n - 1 : 0);
+		}
+		if (o.d[0]) {
+			auto *pc = static_cast<fabgl::VGAPalettedController *>(vga);
+			auto *t = pc->textCursor();
+			if (t && t->visible) add_sprite(o.spr, t);
+			auto *m = pc->mouseCursor();
+			bool mv = m && m->visible;
+			for (int i = 0; i < pc->spritesCount() && o.spr[0] < (uint32_t)MAXSPR - (mv ? 1 : 0); i++) {
+				auto *sp = pc->getSprite(i);
+				if (sp->hardware && sp->visible && sp->allowDraw) add_sprite(o.spr, sp);
+			}
+			if (mv) add_sprite(o.spr, m);
 		}
 	}
 	cur ^= 1;

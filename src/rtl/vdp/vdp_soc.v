@@ -19,6 +19,8 @@
    5c R AUDIO: free places of the audio FIFO; W: one 8-bit sample (unsigned)
    60 W SCAN: the address of the frame description (src/vdp/kg_scanout.cpp) for vdp_video
    64 R KBD: { valid, byte } of the PS/2 FIFO (16 bytes; pops)
+   68 R MOUSE: { new, 0, buttons[2:0], dz[7:0] (+ up), dy[8:0] (+ down), dx[8:0] } summed since the
+        last read (saturated; the read clears them)
  Link: ez_rx_* = bytes from the eZ80 (into RX_DEPTH bytes), ez_cts = room above CTS_ROOM; ez_tx_* =
  bytes to the eZ80 (16). Audio: AUD_DEPTH samples, one leaves on each aud_ce (16384 Hz) as aud_out.
  Loader: the SDRAM is written from ld_* (a byte per write) while the CPU is held in reset.
@@ -58,6 +60,12 @@ module vdp_soc #(
 	// the keyboard: PS/2 set 2 bytes (kg_mcu2 PS2_CODE with PS2_KIND 0)
 	input wire [7:0] ps2_code,
 	input wire ps2_wr,
+	// the mouse: kg_mcu2 MS_* (signed deltas, buttons bit 0 left, 1 right, 2 middle)
+	input wire [7:0] ms_x,
+	input wire [7:0] ms_y,
+	input wire [7:0] ms_z,
+	input wire [7:0] ms_b,
+	input wire ms_wr,
 	// audio
 	input wire aud_ce,
 	output reg [7:0] aud_out = 8'h80,
@@ -208,6 +216,27 @@ reg [4:0] kb_n = 5'd0;
 wire kb_push = ps2_wr & (kb_n != 5'd16);
 reg kb_pop = 1'b0;
 
+// mouse: the deltas summed between two reads, saturated to 9 bits (dz 8)
+reg signed [8:0] ms_ax = 9'sd0, ms_ay = 9'sd0;
+reg signed [7:0] ms_az = 8'sd0;
+reg [2:0] ms_bt = 3'd0;
+reg ms_new = 1'b0;
+reg ms_rd = 1'b0;
+function signed [8:0] sat9(input signed [8:0] a, input signed [7:0] d);
+	reg signed [9:0] t;
+	begin
+		t = a + d;
+		sat9 = t > 10'sd255 ? 9'sd255 : t < -10'sd256 ? -9'sd256 : t[8:0];
+	end
+endfunction
+function signed [7:0] sat8(input signed [7:0] a, input signed [7:0] d);
+	reg signed [8:0] t;
+	begin
+		t = a + d;
+		sat8 = t > 9'sd127 ? 8'sd127 : t < -9'sd128 ? -8'sd128 : t[7:0];
+	end
+endfunction
+
 // audio
 reg [7:0] audf [0:(1 << AUD_LOG2) - 1];
 reg [AUD_LOG2-1:0] aud_wp = 0, aud_rp = 0;
@@ -231,7 +260,7 @@ reg [7:0] tx_d = 8'd0, aud_d = 8'd0;
 
 always @(posedge clk) begin
 	io_ack <= 1'b0;
-	rx_pop <= 1'b0; tx_push <= 1'b0; aud_push <= 1'b0; kb_pop <= 1'b0;
+	rx_pop <= 1'b0; tx_push <= 1'b0; aud_push <= 1'b0; kb_pop <= 1'b0; ms_rd <= 1'b0;
 	dbg_con_wr <= 1'b0; dbg_mark_wr <= 1'b0; sim_shot_wr <= 1'b0;
 	dbg_rx_poll <= io_go && !d_we && (io_off == 8'h40 || io_off == 8'h48);
 	if (io_go) dbg_io <= { d_we, io_off };
@@ -283,6 +312,7 @@ always @(posedge clk) begin
 			8'h58: io_dat <= { 31'd0, sim_req };
 			8'h5c: io_dat <= (1 << AUD_LOG2) - aud_n;
 			8'h64: begin io_dat <= { 23'd0, kb_n != 5'd0, kbf[kb_rp] }; kb_pop <= kb_n != 5'd0; end
+			8'h68: begin io_dat <= { ms_new, 1'b0, ms_bt, ms_az, ms_ay, ms_ax }; ms_rd <= 1'b1; end
 			default: io_dat <= 32'd0;
 			endcase
 		end
@@ -298,6 +328,15 @@ always @(posedge clk) begin
 	if (kb_push) begin kbf[kb_wp] <= ps2_code; kb_wp <= kb_wp + 4'd1; end
 	if (kb_pop) kb_rp <= kb_rp + 4'd1;
 	kb_n <= kb_n + (kb_push ? 5'd1 : 5'd0) - (kb_pop ? 5'd1 : 5'd0);
+	if (ms_wr) begin
+		// (a read a clock before: the sums start again from this one)
+		ms_ax <= sat9(ms_rd ? 9'sd0 : ms_ax, ms_x);
+		ms_ay <= sat9(ms_rd ? 9'sd0 : ms_ay, ms_y);
+		ms_az <= sat8(ms_rd ? 8'sd0 : ms_az, ms_z);
+		ms_bt <= ms_b[2:0]; ms_new <= 1'b1;
+	end else if (ms_rd) begin
+		ms_ax <= 9'sd0; ms_ay <= 9'sd0; ms_az <= 8'sd0; ms_new <= 1'b0;
+	end
 	if (aud_push) begin audf[aud_wp] <= aud_d; aud_wp <= aud_wp + 1'b1; end
 	if (aud_pop) begin aud_out <= audf[aud_rp]; aud_rp <= aud_rp + 1'b1; end
 	aud_n <= aud_n + (aud_push ? 1'b1 : 1'b0) - (aud_pop ? 1'b1 : 1'b0);

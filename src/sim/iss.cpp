@@ -59,6 +59,7 @@ int main(int argc, char **argv) {
     int nshot = 0;
     const char *shot_poll = nullptr;   // --shot-poll file.ppm: at the --stop-poll answer a screenshot, then exit
     bool sp_pend = false;
+    uint64_t sp_at = 0;                // env SHOT_DELAY (us): the --shot-poll screenshot that long after the answer
     std::vector<uint8_t> ps2;          // --ps2 us "hex bytes": PS/2 set 2 bytes on MMIO_KBD from that time
     uint64_t ps2_at = 0; size_t ps2_pos = 0;
     uint32_t scan_desc = 0;            // MMIO_SCAN: the frame description of the firmware (scan_decode.h)
@@ -134,7 +135,7 @@ int main(int argc, char **argv) {
             case 0x54: {
                 uint32_t k = 0;
                 for (uint64_t t : shots) if (t <= ninstr / ipu) k++;
-                return (k > (uint32_t)nshot || sp_pend) ? 1u : 0u;
+                return (k > (uint32_t)nshot || (sp_pend && ninstr / ipu >= sp_at)) ? 1u : 0u;
             }
             case 0x40: case 0x48: {
                 // byte k of the input is there from in_at + k * us_per_byte
@@ -171,7 +172,7 @@ int main(int argc, char **argv) {
                            (unsigned long long)(tot.dm[0] - z.dm[0]), (unsigned long long)(tot.dm[1] - z.dm[1]),
                            (unsigned long long)(tot.st[0] - z.st[0]), (unsigned long long)(tot.st[1] - z.st[1]),
                            (unsigned long long)aud_under);
-                    if (shot_poll) sp_pend = true; else want_exit = true;
+                    if (shot_poll) { sp_pend = true; sp_at = ninstr / ipu + (getenv("SHOT_DELAY") ? strtoull(getenv("SHOT_DELAY"), 0, 10) : 0); } else want_exit = true;
                 }
                 tx_state = (b == 0x80) ? 1 : (tx_state == 1 && b == 0x01) ? 2 : 0;
             }

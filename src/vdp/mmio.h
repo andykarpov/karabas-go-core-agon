@@ -25,5 +25,7 @@
 #define MMIO_SCAN    MMIO_REG(0x60) /* write: the address of the frame description (kg_scanout.cpp), taken
                                        by the scanout at the start of its next frame */
 #define MMIO_KBD     MMIO_REG(0x64) /* read: { bit 8 valid, a PS/2 set 2 byte } of the keyboard (pops) */
+#define MMIO_MOUSE   MMIO_REG(0x68) /* read: { 31 new, 28..26 buttons, 25..18 dz (+ up), 17..9 dy (+ down), 8..0 dx }
+                                       summed since the last read (signed, saturated; the read clears) */
 /* On the board the eZ80 UART RX FIFO level drives CTS to the eZ80 (MOS waits on it); the ISS is a
    lossless pipe without flow control. */

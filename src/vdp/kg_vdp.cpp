@@ -52,17 +52,42 @@ static void kg_audio_task(void *) {
 	}
 }
 
-// vblank of the video output -> vdp-gl (on the host: signal_vblank() of rust_glue.cpp)
+// vblank of the video output -> vdp-gl (on the host: signal_vblank() of rust_glue.cpp). The frame
+// counter too: in userspace-vdp-gl only readEmulatorScreen() counts it (the host emulator reads the
+// screen every frame); the VDP needs it for the text cursor (shown after 3 idle frames) and
+// the frame waits (setWaitForFrames: the Ctrl pause of the cursor control, a VDP variable).
 static void kg_vblank_task(void *) {
 	uint32_t last = MMIO_FRAME;
 	for (;;) {
 		uint32_t f = MMIO_FRAME;
 		if (f != last) {
 			last = f;
+			if (auto *vga = fabgl::VGABaseController::activeController) vga->frameCounter++;
 			fabgl::BaseDisplayController::vblankSignal.store(true);
 			kg_scanout_publish();
 		}
 		coop_yield();
+	}
+}
+
+// The mouse: the deltas of the board MCU (MMIO_MOUSE, USB: y + down) as the PS/2 packets the
+// emulator injects (main.rs MouseMotion: byte 0 = 8 | buttons | x sign << 4 | y sign << 5, then
+// x, y + up, the wheel); polled by the keyboard task (coop has 8 task slots)
+static void kg_mouse_poll() {
+	{
+		uint32_t v = MMIO_MOUSE;
+		auto *m = fabgl::PS2Controller::mouse();
+		if ((v & 0x80000000u) && m) {
+			int dx = (int)(v << 23) >> 23, dy = -((int)(v << 14) >> 23), dz = (int8_t)(v >> 18);
+			if (dy > 255) dy = 255;
+			if (dz > 7) dz = 7; else if (dz < -8) dz = -8;
+			fabgl::MousePacket p;
+			p.data[0] = 8 | ((v >> 26) & 7) | (dx < 0 ? 0x10 : 0) | (dy < 0 ? 0x20 : 0);
+			p.data[1] = (uint8_t)dx;
+			p.data[2] = (uint8_t)dy;
+			p.data[3] = (uint8_t)dz;
+			m->injectPacket(&p);
+		}
 	}
 }
 
@@ -74,7 +99,7 @@ static void kg_kbd_task(void *) {
 	int skip = 0;
 	for (;;) {
 		uint32_t v = MMIO_KBD;
-		if (!(v & 0x100)) { coop_sleep_us(1000); continue; }
+		if (!(v & 0x100)) { kg_mouse_poll(); coop_sleep_us(1000); continue; }
 		uint8_t b = v & 0xff;
 		auto *kb = fabgl::PS2Controller::keyboard();
 		if (skip) { skip--; continue; }
