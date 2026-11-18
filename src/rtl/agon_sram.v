@@ -11,7 +11,7 @@
  The eZ80 side is combinational on its bus (agon_ez80: the address is held through the cycle, mrd
  a read cycle, mwr the one-clock write strobe): /OE low except while writing, /WE = the write strobe
  to the RAM areas; the data of a read are taken by the core at its T2 clock (a whole clock after the
- address: 26.7 ns at 37.5 MHz against 10 ns + the pads).
+ address: 29.3 ns at 34.09 MHz against 10 ns + the pads).
  The loader (kg_mcu2 LD_*, clk_sys, the eZ80 in reset): a byte to the flash area at ld_addr, as
  address, data, /WE low two clocks, /WE high; ld_busy meanwhile. ld_own (clk_sys, while ld_active)
  gives the pins to the loader.

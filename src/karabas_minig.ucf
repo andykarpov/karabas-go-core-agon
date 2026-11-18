@@ -228,7 +228,7 @@ NET "FLASH_HOLD_N"     LOC="P12"    | IOSTANDARD = LVCMOS33; # CONF_IO3
 #   pll_clk<1> 75 MHz (/10, 225 degrees) -> clk_sdr: SDR_CLK only (an ODDR2), as core-archie
 #   pll_clk<2> 25 MHz (/30) -> clk_pix: 640 x 480 at 60 Hz, the OSD, HDMI
 #   pll_clk<3> / <4> 125 MHz (/6, 0 / 180 degrees) -> clk_hdmi / clk_hdmi_n: the TMDS serialiser
-#   pll_clk<5> 37.5 MHz (/20) -> clk_ez: the eZ80 machine (agon_ez80, agon_sram), FT_CLK_OUT / 4
+#   pll_clk<5> 34.09 MHz (/22) -> clk_ez: the eZ80 machine (agon_ez80, agon_sram), FT_CLK_OUT / 4
 # The PERIOD of CLK_50MHZ is derived onto the PLL outputs; clk_sys and clk_pix are related (one PLL).
 # The paths between them: the line buffers / palette (BRAM, two clocks) and the synchronised toggles.
 # ------------------------------------------------------------------------------------------------------------
@@ -249,7 +249,7 @@ TIMEGRP "TG_SDR_OUT" = "TG_SDR_IN" PADS("SDR_A<*>") PADS("SDR_BA<*>") PADS("SDR_
 TIMESPEC "TS_SDR_OUT" = FROM FFS TO "TG_SDR_OUT" 6 ns DATAPATHONLY;
 TIMESPEC "TS_SDR_IN" = FROM "TG_SDR_IN" TO FFS 4 ns DATAPATHONLY;
 # the SRAM is the memory of the eZ80, combinational on its bus (agon_sram.v): its paths are inside a
-# clk_ez period (26.7 ns), not FF to pad
+# clk_ez period (29.3 ns), not FF to pad
 NET "pll_clk<5>" TNM_NET = "TG_CLK_EZ";
 # agon_link: toggle handshakes and two-flip-flop levels between the eZ80 and the VDP clocks
 TIMESPEC "TS_EZ_TO_SYS" = FROM "TG_CLK_EZ" TO "TG_CLK_SYS" 13 ns DATAPATHONLY;

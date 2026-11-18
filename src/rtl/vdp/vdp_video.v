@@ -156,7 +156,8 @@ reg [1:0] s_fl = 2'd0;                 // bit 0 RGBA8888, bit 1 XOR
 reg [24:0] s_prod = 25'd0;
 reg [31:0] sw0 = 32'd0;                // the raw word of the pixel (S_SPW)
 wire [11:0] s_ba = boff + (s_fl[0] ? { s_p[9:0], 2'b00 } : { 1'b0, s_p });
-wire [7:0] s_b8 = sw0 >> { s_ba[1:0], 3'b000 };
+reg [1:0] s_bl = 2'd0;                 // the byte of the pixel in sw0 (s_ba[1:0], registered at phase 0)
+wire [7:0] s_b8 = sw0 >> { s_bl, 3'b000 };
 wire s_on = s_fl[0] ? sw0[31:24] != 8'd0 : s_b8[7:6] != 2'd0;
 wire [5:0] s_rgb = s_fl[0] ? { sw0[23:22], sw0[15:14], sw0[7:6] } : s_b8[5:0];
 wire s_stop = pend || frame_pend;      // a new line to make (or the frame): the sprites stop
@@ -379,6 +380,7 @@ always @(posedge clk) begin
 		2'd0: begin
 			if (s_stop) st <= S_IDLE;
 			sw0 <= raw[s_ba >> 2];
+			s_bl <= s_ba[1:0];
 			lb_wa <= { line[0], s_xs[9:0] + s_p[9:0] };
 		end
 		2'd1: ;

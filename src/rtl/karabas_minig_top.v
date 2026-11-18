@@ -8,8 +8,8 @@
 
  Clocks: one PLL, VCO 750 MHz (50 * 15): clk_sys 75 MHz (the VDP, the MCU link), clk_sdr 75 MHz at
  225 degrees (SDR_CLK through an ODDR2), clk_pix 25 MHz (640 x 480 at 60 Hz, the OSD, HDMI),
- clk_hdmi / clk_hdmi_n 125 MHz, clk_ez 37.5 MHz (the eZ80; the F92 system clock 18.432 MHz as a
- clock enable from it); FT_CLK_OUT = clk_ez / 4 (9.4 MHz).
+ clk_hdmi / clk_hdmi_n 125 MHz, clk_ez 34.09 MHz (the eZ80; 37.5 left no timing margin: user 2026-11-19; the F92 system clock 18.432 MHz as a
+ clock enable from it); FT_CLK_OUT = clk_ez / 4 (8.5 MHz).
  Memory: the eZ80 in the SRAM (agon_sram: MOS, 512 KB, the on-chip 8 KB), the VDP in the SDRAM.
  The .kg ROMs: MOS at 0 (-> the SRAM flash area), the VDP firmware at 0x1000000 (-> SDRAM 0).
  SD2 = the SD card of MOS, driven by the eZ80 SPI (PB4 = /CS).
@@ -146,7 +146,7 @@ kg_pll #(
 	.CLKOUT3_DIVIDE(6),      // clk_hdmi 125 MHz
 	.CLKOUT4_DIVIDE(6),      // clk_hdmi_n 125 MHz, 180 degrees
 	.CLKOUT4_PHASE(180.0),
-	.CLKOUT5_DIVIDE(20)      // clk_ez 37.5 MHz
+	.CLKOUT5_DIVIDE(22)      // clk_ez 34.09 MHz
 ) pll (
 	.clk_in(CLK_50MHZ),
 	.rst(1'b0),
@@ -291,9 +291,9 @@ assign ld_ready = ~sr_busy & vdp_ld_ready;
 
 // ------------------------------------------------------------------ the eZ80 machine
 
-reg [15:0] nco = 16'd0;                  // the F92 system clock: 18.432 / 37.5 of the clocks
+reg [15:0] nco = 16'd0;                  // the F92 system clock: 18.432 / 34.09 of the clocks
 reg sys_ce = 1'b0;
-always @(posedge clk_ez) { sys_ce, nco } <= { 1'b0, nco } + 17'd32212;
+always @(posedge clk_ez) { sys_ce, nco } <= { 1'b0, nco } + 17'd35434;
 wire ez_hold;
 kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_ez_hold (.clk(clk_ez), .d(areset | ld_active | sw_reset), .q(ez_hold));
 reg ez_reset_n = 1'b0;
