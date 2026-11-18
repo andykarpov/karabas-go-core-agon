@@ -51,6 +51,19 @@ def bitmap_draw(n, x, y):         # VDU 23,27,0,n; VDU 23,27,3,x;y;
     return vdu(23, 27, 0, n) + vdu(23, 27, 3) + w(x) + w(y)
 
 
+def gtext(mode_n, s):
+    """VDU 5 (text at the graphics cursor) at odd pixel positions, then inside a graphics window
+    (VDU 24) that cuts the glyphs: the paths the 8-aligned text cells never take."""
+    out = bytearray(mode(mode_n) + vdu(5))
+    for i in range(40):            # OS units: x 1280 wide, y 1024 high; odd pixels in every mode
+        out += plot(4, 3 + i * 29, 1000 - i * 23) + s
+    out += vdu(24) + w(203) + w(301) + w(1001) + w(699)   # graphics window left;bottom;right;top
+    for i in range(40):
+        out += plot(4, 150 + i * 21, 720 - i * 11) + s
+    out += vdu(26, 4)              # reset the windows, VDU 4: text at the text cursor again
+    return bytes(out)
+
+
 def sprites(nspr, steps):
     out = bytearray(bitmap_def(0, 16, 16) + bitmap_def(1, 16, 16))
     for i in range(nspr):          # VDU 23,27,4,i select; 5 clear frames; 6,b add frame; 11 show
@@ -58,7 +71,7 @@ def sprites(nspr, steps):
     out += vdu(23, 27, 7, nspr)    # activate
     for t in range(steps):
         for i in range(nspr):      # move to x;y (pixels), next frame
-            out += vdu(23, 27, 4, i) + vdu(23, 27, 13) + w((i * 37 + t * 4) % 600) + w((i * 23 + t * 3) % 440) + vdu(23, 27, 8)
+            out += vdu(23, 27, 4, i) + vdu(23, 27, 13) + w((i * 37 + t * 4) % 300) + w((i * 23 + t * 3) % 220) + vdu(23, 27, 8)
         out += vdu(23, 27, 15)     # refresh = one game frame
     return bytes(out)
 
@@ -90,6 +103,14 @@ WORK = {
     # a 16x16 RGBA bitmap drawn 200 times, mode 0 and mode 8 (320x240, 64 colours, games)
     'bitmaps0': lambda: mode(0) + bitmap_def(0, 16, 16) + b''.join(bitmap_draw(0, (i * 29) % 620, (i * 17) % 460) for i in range(200)),
     'bitmaps8': lambda: mode(8) + bitmap_def(0, 16, 16) + b''.join(bitmap_draw(0, (i * 29) % 300, (i * 17) % 220) for i in range(200)),
+    # big blits, mode 8: a 64x64 bitmap 50 times, a full-screen 320x240 bitmap 5 times
+    'blit64': lambda: mode(8) + bitmap_def(0, 64, 64) + b''.join(bitmap_draw(0, (i * 29) % 256, (i * 17) % 176) for i in range(50)),
+    'blitfull': lambda: mode(8) + bitmap_def(0, 320, 240) + b''.join(bitmap_draw(0, 0, 0) for i in range(5)),
+    # text at the graphics cursor (odd positions, clipped by a graphics window): 16 / 4 / 2 / 64 colours
+    'gtext0': lambda: gtext(0, b'Agon!'),
+    'gtext1': lambda: gtext(1, b'Agon!'),
+    'gtext2': lambda: gtext(2, b'Agon!'),
+    'gtext8': lambda: gtext(8, b'Agon!'),
     # 16 sprites of 16x16 (2 frames), 60 refreshes, mode 8
     'sprites8': lambda: mode(8) + sprites(16, 60),
     # text0 while 3 channels play 4 s notes (audio cost = textaudio - text0)

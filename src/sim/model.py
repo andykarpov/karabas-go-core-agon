@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-# Ф0.4 cycle model over the DONE lines of run_f0.sh logs, the calibration of core-doom (Verilator,
-# VexRiscv 4K/4K, SDRAM at the CPU clock): cycles = 1.50 * instr + 28 * (I$ + D$ line fills).
-# Prints per stream the ISS time (instr / IPU) and the modelled time at 80 MHz.
-# usage: model.py <out_dir> [MHz]
+# Ф0.4 cycle model over the DONE lines of run_f0.sh logs, the calibration of core-doom (VexRiscv
+# 4K/4K, SDRAM at the CPU clock): cycles = 1.50 * instr + MISS * (I$ + D$ line fills). MISS = 33:
+# core-doom Ф1.1 RTL (its real SDRAM controller) measured ~33 clocks per line fill (Ф0 model: 28);
+# its first Mini G build closes timing at 75 MHz.
+# Prints per stream the ISS time (instr / IPU) and the modelled time.
+# usage: model.py <out_dir> [MHz, default 75] [MISS, default 33]
 import glob, os, sys
 OUT = sys.argv[1]
-MHZ = float(sys.argv[2]) if len(sys.argv) > 2 else 80.0
-BASE, MISS = 1.50, 28
+MHZ = float(sys.argv[2]) if len(sys.argv) > 2 else 75.0
+BASE = 1.50
+MISS = float(sys.argv[3]) if len(sys.argv) > 3 else 33
 print(f"{'stream':>10} {'Minstr':>7} {'miss/kI':>7} {'CPI':>5} {'ISS ms':>7} {f'{MHZ:.0f} MHz ms':>10}")
 for fn in sorted(glob.glob(os.path.join(OUT, '*.log'))):
     done = [l.split() for l in open(fn) if l.startswith('DONE')]

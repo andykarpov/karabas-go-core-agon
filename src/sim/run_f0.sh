@@ -14,7 +14,7 @@ IN_AT=${IN_AT:-1500000}
 IPU=${IPU:-50}
 ICACHE=${ICACHE:-4096}
 DCACHE=${DCACHE:-4096}
-NAMES=${*:-"text0 text1 text2 text3 text8 modes lines fills cls bitmaps0 bitmaps8 sprites8 textaudio"}
+NAMES=${*:-"text0 text1 text2 text3 text8 modes lines fills cls bitmaps0 bitmaps8 blit64 blitfull gtext0 gtext1 gtext2 gtext8 sprites8 textaudio"}
 mkdir -p "$OUT"
 make -s iss
 for n in $NAMES; do
