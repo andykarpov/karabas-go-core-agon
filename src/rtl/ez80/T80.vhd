@@ -685,9 +685,11 @@ begin
 							PCU <= IU;
 						elsif Ez = '1' and JumpM = '1' then
 							-- karabas: the mixed return: mode 1 -> ADL, the upper byte = DI (00 unless
-							-- ADL or L); mode 0 -> Z80 mode, MBASE
+							-- ADL or L); mode 0 -> Z80 mode, MBASE, the high byte = DI (read in this
+							-- last cycle: W is loaded at the same edge)
 							A <= WZ;
 							PC <= unsigned(WZ);
+							if ModeB = '0' then A(15 downto 8) <= DI_Reg; PC(15 downto 8) <= unsigned(DI_Reg); end if;
 							if ModeB = '1' then
 								if (ADL or L_s) = '1' then AU_r <= DI_Reg; PCU <= DI_Reg;
 								else AU_r <= (others => '0'); PCU <= (others => '0'); end if;

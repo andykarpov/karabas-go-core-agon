@@ -26,6 +26,9 @@ $(OBJ)/.ready: $(SRC)/.ready $(wildcard stub/*.h stub/debug/*.h) Makefile
 	# one instruction per call also for EI (CEmu runs the next one in the same call)
 	sed -i 's/cpu.eiDelay = cpu.cycles + 1;/cpu.eiDelay = cpu.cycles; \/* karabas: stop after EI *\//' $(OBJ)/cpu.c
 	grep -q 'karabas: stop after EI' $(OBJ)/cpu.c
+	# mixed RST / interrupt / trap pushes as the Agon (its crate, and what RET.L pops): from ADL with
+	# the PC on SPL: U, H, L, then the mode byte; interrupts from Z80 mode with MADL: PC on SPL
+	python3 cpu_patch.py $(OBJ)/cpu.c
 	touch $@
 
 build/cemu-oracle: $(OBJ)/.ready main.c

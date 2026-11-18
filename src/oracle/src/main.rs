@@ -5,7 +5,7 @@
 // VDP ISS), an instruction trace (--trace) for the lockstep check of the eZ80 RTL.
 //
 // usage: agon-oracle --mos mos.bin [--sd sd.img] [--ms N (emulated time, default 3000)]
-//          [--keys "text" (typed after --keys-at ms, default 2000; \r = Enter)]
+//          [--keys "text" (typed after --keys-at ms, default 2000; \r = Enter, ~ = 500 ms pause)]
 //          [--vdp-out file] [--trace file [--trace-from N] [--trace-n N]] [--ops file] [--hostfs]
 // trace line (after the instruction at PC): n cycles PC ADL MADL MB AF BC DE HL IX IY SPS SPL I IFF1 IFF2,
 // then its bus events: w:ADDR=VV (memory write), r:PORT=VV / o:PORT=VV (port read / write),
@@ -345,8 +345,13 @@ fn main() {
         }
         if c >= next_key {
             if let Some((k, down)) = key_events.pop_front() {
-                // keyboard packet: 0x81, 4, ascii, modifiers, vkey, down
-                vdp.borrow_mut().reply(&[0x81, 4, k, 0, 0, down]);
+                if k == b'~' {
+                    // a pause of 500 ms (a program loading / starting)
+                    if down == 1 { next_key += 24 * key_gap; }
+                } else {
+                    // keyboard packet: 0x81, 4, ascii, modifiers, vkey, down
+                    vdp.borrow_mut().reply(&[0x81, 4, k, 0, 0, down]);
+                }
             }
             next_key += key_gap;
         }

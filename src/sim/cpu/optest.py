@@ -84,6 +84,11 @@ def program(key, ops, suffix, adl, rnd):
     ptr = lambda: RAM + rnd.randrange(0x8000)
     for r in (0x01, 0x11):                       # BC / DE: pointers or values
         ins([r] + w24(ptr() if rnd.random() < 0.6 else rnd.randrange(1 << 24)))
+    k = rnd.random()                             # the last iteration of block instructions:
+    if k < 0.15:                                 # B = 1
+        ins([0x01] + w24(rnd.randrange(256) << 16 | 0x0100 | rnd.randrange(256)))
+    elif k < 0.3:                                # BC = 1 (24 bits) / 0001 (16 bits)
+        ins([0x01] + w24(1 if rnd.random() < 0.5 else rnd.randrange(256) << 16 | 1))
     ins([0xdd, 0x21] + w24(ptr()))               # IX
     ins([0xfd, 0x21] + w24(ptr()))               # IY
     ins([0x40, 0x31] + w16(0xf000 + rnd.randrange(0x800) * 2))   # .SIS LD SP,nnnn (SPS)
@@ -92,6 +97,8 @@ def program(key, ops, suffix, adl, rnd):
     ins([0xe5])
     ins([0xf1])                                  # F, A random
     ins([0x21] + w24(ptr()))                     # HL a pointer
+    if rnd.random() < 0.3:
+        ins([0xed, 0x7d])                        # STMIX: MADL = 1 (mixed TRAP / RET / interrupts)
     if not adl:
         here = len(code) + 4
         ins([0x40, 0xc3] + w16(here))            # JP.SIS to the next: Z80 mode (MBASE 0)
@@ -110,19 +117,21 @@ def run_case(args):
     key, ops, suffix, adl, seed = args
     rnd = random.Random(hash((key, suffix, adl, seed)) & 0xffffffff)
     img, n = program(key, ops, suffix, adl, rnd)
+    fill = rnd.randrange(1 << 20)   # RAM contents (stack, pointers): a hash of the address and this
     with tempfile.TemporaryDirectory() as d:
         b = os.path.join(d, 'p.bin')
         t = os.path.join(d, 't.txt')
         open(b, 'wb').write(img)
         if REF == 'cemu':
-            cmd = [CEMU, '--flash', b, '--n', str(n + 3), '--trace', t]
+            cmd = [CEMU, '--flash', b, '--n', str(n + 3), '--trace', t, '--fill', str(fill)]
         else:
             cmd = [ORACLE, '--mos', b, '--ms', '1', '--trace', t, '--trace-n', str(n + 3)]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         # the reference trapped (invalid opcode: CEmu cpu_trap = an RST 00): the next PC is 000000
         lines = open(t).read().splitlines()
         trap = len(lines) > n + 1 and int(lines[n + 1].split()[2], 16) < 8   # (it may fetch a byte or two at 0)
-        r = subprocess.run([TB, '--flash', b, '--trace', t, '--max', str(n + 1), '--quiet'],
+        r = subprocess.run([TB, '--flash', b, '--trace', t, '--max', str(n + 1), '--quiet'] +
+                           (['--fill-ext', str(fill)] if REF == 'cemu' else []),
                            capture_output=True, text=True)
     ok = r.returncode == 0 and 'PASS' in r.stdout
     # after a trap CEmu may run on into the first bytes at 000000 in the same step (the suffix of the

@@ -89,11 +89,12 @@ void gui_console_err_printf(const char *format, ...) { va_list ap; va_start(ap, 
 
 int main(int argc, char **argv) {
     const char *flash = NULL, *trace = NULL;
-    long n = 1000;
+    long n = 1000, fill = -1;   /* --fill N: RAM filled with a hash (as the testbench --fill-ext N) */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--flash")) flash = argv[++i];
         else if (!strcmp(argv[i], "--trace")) trace = argv[++i];
         else if (!strcmp(argv[i], "--n")) n = atol(argv[++i]);
+        else if (!strcmp(argv[i], "--fill")) fill = atol(argv[++i]);
     }
     if (!flash || !trace) { fprintf(stderr, "usage: %s --flash p.bin --n N --trace t.txt\n", argv[0]); return 2; }
     FILE *f = fopen(flash, "rb");
@@ -103,6 +104,10 @@ int main(int argc, char **argv) {
     FILE *t = fopen(trace, "w");
     if (!t) { perror(trace); return 2; }
 
+    if (fill >= 0) {
+        for (uint32_t i = 0; i < sizeof ext; i++) ext[i] = (uint8_t)(((uint32_t)i * 2654435761u + fill * 40503u) >> 13);
+        for (uint32_t i = 0; i < sizeof ram; i++) ram[i] = (uint8_t)(((uint32_t)(i + 0x80000) * 2654435761u + fill * 40503u) >> 13);
+    }
     memset(&cpu, 0, sizeof cpu);
     cpu_flush(0, false);
     /* as the core and the other oracle after reset: AF = FFFF (CEmu clears everything) */

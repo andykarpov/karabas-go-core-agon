@@ -89,6 +89,7 @@ int main(int argc, char **argv) {
     uint64_t max = ~0ull;
     uint32_t fmask = EZ80 ? 0xd7 : 0xff;  // eZ80: flag bits 3 and 5 are undocumented (CEmu: "undef")
     bool quiet = false, io_lo = false;   // --io-lo: port writes compared by the low address byte
+    long fill = -1;                      // --fill-ext N: RAM (external + on-chip) filled as cemu-oracle --fill N
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--mem")) memf = argv[++i];
         else if (!strcmp(argv[i], "--flash")) flashf = argv[++i];
@@ -97,11 +98,16 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--fmask")) fmask = strtoul(argv[++i], 0, 0);
         else if (!strcmp(argv[i], "--quiet")) quiet = true;
         else if (!strcmp(argv[i], "--io-lo")) io_lo = true;
+        else if (!strcmp(argv[i], "--fill-ext")) fill = strtol(argv[++i], 0, 0);
     }
     const uint32_t MEMSZ = EZ80 ? (1u << 24) : 65536, AMASK = MEMSZ - 1;
     if ((!memf && !flashf) || !trf) { fprintf(stderr, "usage: %s (--mem mem.bin | --flash mos.bin) --trace trace.txt [--max N] [--fmask M]\n", argv[0]); return 2; }
     std::vector<uint8_t> mem(EZ80 ? 0 : MEMSZ);
     Map map;
+    if (fill >= 0) {
+        for (uint32_t i = 0; i < map.ext.size(); i++) map.ext[i] = (uint8_t)(((uint32_t)i * 2654435761u + fill * 40503u) >> 13);
+        for (uint32_t i = 0; i < map.ram.size(); i++) map.ram[i] = (uint8_t)(((uint32_t)(i + 0x80000) * 2654435761u + fill * 40503u) >> 13);
+    }
     {
         FILE *f = fopen(memf ? memf : flashf, "rb");
         if (!f) { perror(memf ? memf : flashf); return 2; }

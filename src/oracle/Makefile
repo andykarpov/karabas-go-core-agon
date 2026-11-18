@@ -3,6 +3,7 @@
 # workspace-inherited keys made literal, and kg_trace.rs added as a child module of agon_machine.
 #   make            -> target/release/agon-oracle
 #   make sd         -> build/sd.img (16 MB FAT16, a few test files)
+#   make sd-bbc     -> build/sd-bbc.img (BBC BASIC Z80 + ADL)
 EMU  := ../../upstream/fab-agon-emulator
 CR   := build/agon-ez80-emulator
 CARGO ?= $(HOME)/.cargo/bin/cargo
@@ -50,6 +51,22 @@ build/sd.img:
 	mcopy -i $@ build/hello.txt ::HELLO.TXT
 	mmd -i $@ ::BIN
 
+# BBC BASIC for Agon (zlib, R.T. Russell / Dean Belfield): the Z80-mode one (runs at 040000 with
+# MBASE 04) and the ADL one, from their GitHub releases, checked by sha256
+BBC_Z80 := https://github.com/breakintoprogram/agon-bbc-basic/releases/download/v1.06/bbcbasic.bin
+BBC_ADL := https://github.com/breakintoprogram/agon-bbc-basic-adl/releases/download/v1.03/bbcbasic24.bin
+sd-bbc: build/sd-bbc.img
+build/sd-bbc.img:
+	mkdir -p build/bbc
+	curl -sSfL -o build/bbc/bbcbasic.bin $(BBC_Z80)
+	curl -sSfL -o build/bbc/bbcbasic24.bin $(BBC_ADL)
+	echo "f94a17226bcba2aaadb51edc1b351ed3aca7dc96413623f954b839d9467a4b35  build/bbc/bbcbasic.bin" | sha256sum -c --quiet
+	echo "bedbb3e977a0bbea0874a58a450b6155f3a6ea65677a19a1b6f7d415ed31ca26  build/bbc/bbcbasic24.bin" | sha256sum -c --quiet
+	mkfs.fat -F 16 -n AGONSD -C $@ 16384 >/dev/null
+	mmd -i $@ ::BIN
+	mcopy -i $@ build/bbc/bbcbasic.bin ::BBCBASIC.BIN
+	mcopy -i $@ build/bbc/bbcbasic24.bin ::BBC24.BIN
+
 clean:
 	rm -rf build target
-.PHONY: all sd clean
+.PHONY: all sd sd-bbc clean

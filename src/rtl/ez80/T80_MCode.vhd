@@ -384,7 +384,9 @@ begin
 			k := mc - p0;
 			if k >= 0 and k < nb then
 				if adlv = 1 then
-					if rst or ILm = '0' then
+					-- (RST with L: PC 3 bytes then the mode byte on SPL, as the Agon / the crate: the
+					-- order RET.L pops; CEmu's U, mode, H, L does not pair with its own RET)
+					if (rst and Lm = '0') or (not rst and ILm = '0') then
 						case k is when 0 => b := 0; when 1 => b := 3; when 2 => b := 1; when others => b := 2; end case;
 					else
 						case k is when 0 => b := 0; when 1 => b := 1; when 2 => b := 2; when others => b := 3; end case;
@@ -3137,8 +3139,8 @@ begin
 
 		-- karabas: eZ80 TRAP on an invalid opcode (the sets of CEmu cpu.c, the same in every mode and
 		-- with every suffix): PC back to the opcode (DD / FD CB d op: to d), then as an interrupt to
-		-- 000000: with MADL mixed (ADL: PCU, mode, PCH, PCL on SPL; Z80 mode: PCH, PCL on SPS, mode on
-		-- SPL), without: PC as a CALL in ADL; the new mode ADL or MADL (CEmu cpu_trap_rewind)
+		-- 000000: with MADL mixed (PC, then the mode byte, all on SPL, as the interrupts of the Agon),
+		-- without: PC as a CALL; the new mode ADL or MADL (CEmu cpu_trap_rewind)
 		trap := false; trw := 1; tfirst := 1;
 		if EZ80 /= 0 and NMICycle = '1' then
 			-- NMI (CEmu cpu_interrupt(0x66), untested: the Agon has no NMI source): the push of the
@@ -3212,16 +3214,13 @@ begin
 				IncDec_16 <= "1111";
 				Set_Addr_To <= aSP;
 				-- the byte: 0 PCU, 1 PCH, 2 PCL, 3 mode
+				-- (as the interrupt of the Agon / the crate: PC then the mode byte, all on SPL with MADL)
 				if adlv = 1 then
-					if MADLm = '1' then
-						case k2 is when 0 => trw := 0; when 1 => trw := 3; when 2 => trw := 1; when others => trw := 2; end case;
-					else
-						case k2 is when 0 => trw := 0; when 1 => trw := 1; when others => trw := 2; end case;
-					end if;
+					case k2 is when 0 => trw := 0; when 1 => trw := 1; when 2 => trw := 2; when others => trw := 3; end case;
 					StkSelA <= "01"; StkSelI <= "01";
 				else
 					case k2 is when 0 => trw := 1; when 1 => trw := 2; when others => trw := 3; end case;
-					if trw = 3 then StkSelA <= "01"; StkSelI <= "01"; else StkSelA <= "11"; StkSelI <= "11"; end if;
+					if MADLm = '1' then StkSelA <= "01"; StkSelI <= "01"; else StkSelA <= "11"; StkSelI <= "11"; end if;
 				end if;
 				case trw is
 				when 0 => Set_BusB_To <= "1101"; BusBU <= '1';
