@@ -6,7 +6,7 @@
 //
 // usage: agon-oracle --mos mos.bin [--sd sd.img] [--ms N (emulated time, default 3000)]
 //          [--keys "text" (typed after --keys-at ms, default 2000; \r = Enter)]
-//          [--vdp-out file] [--trace file [--trace-from N] [--trace-n N]] [--hostfs]
+//          [--vdp-out file] [--trace file [--trace-from N] [--trace-n N]] [--ops file] [--hostfs]
 // trace line (after the instruction at PC): n cycles PC ADL MADL MB AF BC DE HL IX IY SP I IFF1
 use agon_ez80_emulator::{gpio, AgonMachine, AgonMachineConfig, RamInit, SerialLink};
 use ez80::{Reg16, Reg8};
@@ -174,9 +174,33 @@ fn main() {
     let key_gap = CLOCK_HZ / 50; // 20 ms per key press / release
     let mut next_key = keys_at * CLOCK_HZ / 1000;
     let mut key_events: VecDeque<(u8, u8)> = keys.bytes().flat_map(|k| [(k, 1u8), (k, 0u8)]).collect();
+    // --ops file: opcode histogram (size prefix, DD/FD, CB/ED, opcode; ADL or Z80 mode)
+    let ops_path = arg::<String>(&a, "--ops");
+    let mut ops: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut n: u64 = 0;
     while m.kg_cycles() < end {
         let pc = cpu.state.pc();
+        if ops_path.is_some() && !cpu.is_halted() {
+            let b = |i: u32| m.kg_peek(pc.wrapping_add(i));
+            let mut k = String::from(if cpu.state.reg.adl { "ADL " } else { "Z80 " });
+            let mut i = 0;
+            match b(0) {
+                0x40 => { k += ".SIS "; i = 1; }
+                0x49 => { k += ".LIS "; i = 1; }
+                0x52 => { k += ".SIL "; i = 1; }
+                0x5b => { k += ".LIL "; i = 1; }
+                _ => {}
+            }
+            let op = b(i);
+            k += &match op {
+                0xdd | 0xfd => {
+                    if b(i + 1) == 0xcb { format!("{:02X} CB d {:02X}", op, b(i + 3)) } else { format!("{:02X} {:02X}", op, b(i + 1)) }
+                }
+                0xcb | 0xed => format!("{:02X} {:02X}", op, b(i + 1)),
+                _ => format!("{:02X}", op),
+            };
+            *ops.entry(k).or_insert(0) += 1;
+        }
         m.kg_step(&mut cpu);
         n += 1;
         if let Some(t) = trace.as_mut() {
@@ -204,6 +228,14 @@ fn main() {
                 vdp.borrow_mut().reply(&[0x81, 4, k, 0, 0, down]);
             }
             next_key += key_gap;
+        }
+    }
+    if let Some(p) = ops_path {
+        let mut v: Vec<_> = ops.into_iter().collect();
+        v.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
+        let mut f = std::fs::File::create(p).unwrap();
+        for (k, c) in v {
+            writeln!(f, "{:10} {}", c, k).unwrap();
         }
     }
     println!();
