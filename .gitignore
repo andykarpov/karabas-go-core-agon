@@ -93,3 +93,5 @@ src/sim/build/
 # Ф0 VDP firmware / ISS builds
 src/vdp/build-*/
 src/sim/iss
+src/oracle/build/
+src/oracle/target/
