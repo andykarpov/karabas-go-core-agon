@@ -60,7 +60,9 @@ module f92 (
 	f92_mem u_mem (.clk(clk), .reset(reset), .a(maddr), .sel_ram(sel_ram), .sel_flash(sel_flash),
 		.fofs(flash_ofs), .sel_ext(sel_ext), .psel(1'b1), .paddr(port), .wr(io_wr), .din(din),
 		.dout(d_mem), .pmine(m_mem));
-	f92_prt u_prt (.clk(clk), .reset(reset), .sys_ce(sys_ce), .sel(s_prt), .addr(port[4:0] - 5'h00),
+	// PRT0 / PRT2 count (MOS: delays, the system timer); PRT1 / 3 / 4 / 5 registers only, no count or
+	// interrupt (user 2026-11-18: ~300 LUT for the Mini G fit)
+	f92_prt #(.FULL_MASK(6'b000101)) u_prt (.clk(clk), .reset(reset), .sys_ce(sys_ce), .sel(s_prt), .addr(port[4:0] - 5'h00),
 		.rd(io_rd), .wr(io_wr), .din(din), .dout(d_prt), .irq(i_prt));
 	f92_gpio u_gb (.clk(clk), .reset(reset), .sel(s_gb), .addr(port[1:0] - 2'd2), .wr(io_wr), .din(din),
 		.dout(d_gb), .pin_in(pb_in), .pin_out(gb_out), .pin_oe(pb_oe), .irq(i_gb));

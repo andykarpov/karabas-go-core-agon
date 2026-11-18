@@ -11,7 +11,9 @@
 //   TMRx_RR_L / RR_H write: the reload value
 // The counter steps on sys_ce (the 18.432 MHz system clock of the F92 as a clock enable, so MOS
 // delays keep real time whatever the CPU clock). irq[x] = PRT_IRQ and IRQ_EN.
-module f92_prt (
+module f92_prt #(
+	parameter [5:0] FULL_MASK = 6'b111111   // karabas: the timers that count (the others: registers only, no count / irq)
+) (
 	input             clk,
 	input             reset,
 	input             sys_ce,      // one pulse per F92 system clock
@@ -29,12 +31,12 @@ module f92_prt (
 	wire [7:0] l0, l1, l2, l3, l4, l5;
 	wire [7:0] h0, h1, h2, h3, h4, h5;
 
-	f92_prt1 u0 (clk, reset, sys_ce, sel && t == 3'd0, rg, rd, wr, din, c0, l0, h0, irq[0]);
-	f92_prt1 u1 (clk, reset, sys_ce, sel && t == 3'd1, rg, rd, wr, din, c1, l1, h1, irq[1]);
-	f92_prt1 u2 (clk, reset, sys_ce, sel && t == 3'd2, rg, rd, wr, din, c2, l2, h2, irq[2]);
-	f92_prt1 u3 (clk, reset, sys_ce, sel && t == 3'd3, rg, rd, wr, din, c3, l3, h3, irq[3]);
-	f92_prt1 u4 (clk, reset, sys_ce, sel && t == 3'd4, rg, rd, wr, din, c4, l4, h4, irq[4]);
-	f92_prt1 u5 (clk, reset, sys_ce, sel && t == 3'd5, rg, rd, wr, din, c5, l5, h5, irq[5]);
+	f92_prt1 #(.FULL(FULL_MASK[0])) u0 (clk, reset, sys_ce, sel && t == 3'd0, rg, rd, wr, din, c0, l0, h0, irq[0]);
+	f92_prt1 #(.FULL(FULL_MASK[1])) u1 (clk, reset, sys_ce, sel && t == 3'd1, rg, rd, wr, din, c1, l1, h1, irq[1]);
+	f92_prt1 #(.FULL(FULL_MASK[2])) u2 (clk, reset, sys_ce, sel && t == 3'd2, rg, rd, wr, din, c2, l2, h2, irq[2]);
+	f92_prt1 #(.FULL(FULL_MASK[3])) u3 (clk, reset, sys_ce, sel && t == 3'd3, rg, rd, wr, din, c3, l3, h3, irq[3]);
+	f92_prt1 #(.FULL(FULL_MASK[4])) u4 (clk, reset, sys_ce, sel && t == 3'd4, rg, rd, wr, din, c4, l4, h4, irq[4]);
+	f92_prt1 #(.FULL(FULL_MASK[5])) u5 (clk, reset, sys_ce, sel && t == 3'd5, rg, rd, wr, din, c5, l5, h5, irq[5]);
 
 	reg [7:0] c, l, h;
 	always @* begin
@@ -51,7 +53,9 @@ module f92_prt (
 endmodule
 
 // one timer
-module f92_prt1 (
+module f92_prt1 #(
+	parameter FULL = 1
+) (
 	input             clk,
 	input             reset,
 	input             sys_ce,
@@ -68,7 +72,7 @@ module f92_prt1 (
 	reg [15:0] rld, cnt;
 	reg  [7:0] pre;
 	assign dr_l = cnt[7:0];
-	assign irq = ctl[7] & ctl[6];
+	assign irq = FULL ? ctl[7] & ctl[6] : 1'b0;
 	wire [7:0] div = ctl[3:2] == 2'd0 ? 8'd3 : ctl[3:2] == 2'd1 ? 8'd15 :
 	                 ctl[3:2] == 2'd2 ? 8'd63 : 8'd255;
 
@@ -79,7 +83,7 @@ module f92_prt1 (
 			// a CTL read clears PRT_IRQ, before the counter: a count to 0 in the same clock wins (the read
 			// returned the old 0; the flag stays for the next one: MOS TIMER_WAIT polls a single pass)
 			if (me && rd && rg == 2'd0) ctl[7] <= 1'b0;
-			if (sys_ce && ctl[0]) begin
+			if (FULL && sys_ce && ctl[0]) begin
 				if (ctl[1]) begin
 					cnt <= rld; pre <= 8'h00; ctl[1] <= 1'b0;
 				end else if (pre == div) begin
