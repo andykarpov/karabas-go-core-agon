@@ -1,0 +1,71 @@
+# План ядра Agon Light для Karabas Go / Mini / Mini G
+
+Цель: Agon Light / Console8 на платах Karabas (XC6SLX25, ISE 14.7): eZ80F92 на 18,432 МГц, 512 КБ внешней RAM, SD-карта, на которой работает MOS, и VDP (видео, звук, клавиатура и мышь), совместимый с прошивкой Console8. Должны запускаться родные MOS, BBC BASIC (ADL) и программы с SD-карты Agon.
+
+## Что изучено (2026-11-18)
+
+### Ядра eZ80
+
+Полного и зрелого софт-ядра eZ80 нет.
+
+| Проект | Что даёт |
+|---|---|
+| [MZ80K-USER-OLD/MSXnano-eZ80](https://github.com/MZ80K-USER-OLD/MSXnano-eZ80) (VHDL, MSX на Tang Nano 20K) | T80, расширенный под eZ80 (`fpga/G80A_eZ80/t80_*_ez80.vhd`): ADL, 24-битные регистры, SPS/SPL, префиксы .SIS/.LIL, MBASE, MADL и смешанные CALL/RET/RST, LEA/PEA/MLT/TST, блочные LDIR/CPIR на 24 бита, IM0/1/2 и NMI в ADL. Нет SLP, TRAP на недопустимые опкоды, IN0/OUT0/TSTIO и новых блочных команд ввода-вывода (это решение автора), полной проверки системы команд. STA R18.3 на Gowin: Fmax 32 МГц (цель 54). Активен (R19.1, 2026-11-14), документы на японском. **В репо нет файла лицензии**: в заголовках файлов BSD-3 T80 (Daniel Wallner), правки автора отдельной лицензии не имеют. Пустой репо того же автора `ez80_MicroCode` (2026-10-04, «ez80 for FPGA»). |
+| [Y80e](https://opencores.org/projects/y80e) (Verilog, BSD) | Z80 + Z180 + команды eZ80 **без ADL**; заброшен (2013 / SVN 2019), 2557 LE на Cyclone III |
+| [avwohl/z80fpga](https://github.com/avwohl/z80fpga) (SV, микрокод) | Z80, eZ80 только в планах |
+
+Эталоны для проверки: [tomm/fab-agon-emulator](https://github.com/tomm/fab-agon-emulator) (GPL-3; `agon-ez80-emulator` грузит настоящую MOS, eZ80 из крейта [tomm/ez80](https://github.com/tomm/ez80)), CEmu (полный eZ80), Zilog UM0077 (CPU) и PS0153 (eZ80F92).
+
+### Софт Agon
+
+| Что | Лицензия |
+|---|---|
+| [AgonPlatform/agon-mos](https://github.com/AgonPlatform/agon-mos) (MOS, на eZ80 из флеша 128 КБ) | MIT (FatFS — своя BSD-подобная) |
+| [AgonPlatform/agon-vdp](https://github.com/AgonPlatform/agon-vdp) (VDP Console8, ESP32) | MIT |
+| [AgonPlatform/vdp-gl](https://github.com/AgonPlatform/vdp-gl) (форк FabGL, на нём VDP) | GPL-3 (FabGL: GPL-3 или коммерческая) |
+| [tomm/userspace-vdp-gl](https://github.com/tomm/userspace-vdp-gl) (vdp-gl без ESP32: Linux / Windows) | GPL-3 |
+| [AgonPlatform/agon-bbc-basic](https://github.com/AgonPlatform/agon-bbc-basic) (ADL) | zlib-подобная (R. T. Russell) |
+
+Всё можно класть в `.kg` вместе с исходниками; ядро под GPL-3.
+
+### Железо Agon (по AgDev Agon-HW.md, проверить по исходникам MOS)
+
+- eZ80F92, 18,432 МГц; флеш 128 КБ на кристалле (MOS), SRAM 8 КБ на кристалле, внешняя RAM 512 КБ.
+- UART0 ↔ ESP32 VDP: 1 152 000 бод (запасной вариант 384 000), RTS/CTS. Поток команд VDU в стиле BBC Micro, обратно — клавиши, мышь, ответы на запросы.
+- SD-карта по SPI eZ80, FatFS в MOS.
+- GPIO PB / PC / PD; PB1 от VDP (VSYNC); таймеры PRT, I2C, RTC без кварца (время приходит от VDP).
+- На оригинале VDP генерирует видео ESP32 (DMA I2S → резисторный ЦАП VGA), звук через ЦАП ESP32, PS/2 клавиатура и мышь на ESP32.
+
+**Ни одного Agon на ПЛИС и ни одного VDP на ПЛИС нет** (поиск GitHub и веба 2026-11-18). Главная трудность ядра — VDP. ESP32 на наших платах нет (Wi-Fi — ESP8266).
+
+## Варианты VDP
+
+1. **Софт-процессор в ПЛИС с настоящей прошивкой VDP.** VexRiscv (rv32im, как в core-doom), код и куча в SDRAM, кадр в SRAM или SDRAM, развёртка и палитра в RTL. agon-vdp + vdp-gl собираются с прослойкой по образцу userspace-vdp-gl (там уже есть замена ESP32 и FreeRTOS). Плюс: полная совместимость с VDP Console8 и его обновлениями. Риски: C++17 и потоки в прослойке, объём кода и кучи, скорость (ESP32 — два ядра по 240 МГц, у нас одно около 80 МГц; зато развёртку делает железо, а не процессор).
+2. **VDP в RTL (подмножество).** Текст, режимы экрана, графические примитивы, битмапы, спрайты, звук — аппаратно. Плюс: скорость и мало памяти. Минус: огромный протокол VDU (буферизованные команды и т. п.), совместимость только частичная.
+3. **Смесь:** развёртка, спрайты, звук и блиттер в RTL, разбор протокола на маленьком процессоре.
+
+Выбор — по замерам Ф0.
+
+## Решения
+
+- 2026-11-18 (пользователь): делаем Agon; приватный репо `karabas-go-core-agon`.
+- Открыто: откуда ядро eZ80 — (а) MSXnano-eZ80 с разрешения автора (ему надо написать, лицензии нет) или (б) своё расширение BSD-ного T80 до eZ80 (MSXnano — только как пример).
+- Открыто: вариант VDP (после Ф0).
+
+## Ф0. Замеры (ветка f0-measure)
+
+1. **eZ80 на XC6SLX25.** XST кандидата (MSXnano-eZ80 в черновике, исходники не в репо до решения по лицензии): LUT и Fmax. Нужно 18,432 МГц (лучше с запасом на турбо).
+2. **Эталон CPU.** `agon-ez80-emulator` → трасса; сравнение с RTL покомандно в симуляции. Критерий: MOS в симуляции доходит до обмена с VDP.
+3. **Сборка VDP для rv32im.** agon-vdp + userspace-vdp-gl для голого rv32im: собирается ли, размер кода и кучи.
+4. **Нагрузка VDP.** На ISS из core-doom: инструкций на типовые действия (вывод и прокрутка текста, смена режима, PLOT, битмапы) против бюджета VexRiscv 80 МГц.
+5. **Сводка ёмкости:** eZ80 + периферия F92 + VexRiscv + видео + модули kg против LX25.
+
+## Ф1 и дальше (наброски, уточнить после Ф0)
+
+- Ф1: eZ80F92 (CPU + UART0/1, SPI, GPIO, PRT, флеш с MOS, SRAM 8К, chip select) + RAM 512 КБ в SRAM платы + SD2 по SPI напрямую (на Go SD_* на ПЛИС, на Mini / Mini G проверить ucf) + заглушка VDP (текстовый терминал) на Mini G. MOS грузится, `*CAT` с SD.
+- Ф2: VDP по выбранному варианту, клавиатура и мышь от `kg_mcu`, звук.
+- Ф3: Go / Mini, релиз.
+
+## Беклог
+
+(пусто)
