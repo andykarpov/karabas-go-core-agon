@@ -1,0 +1,46 @@
+--- a/dispdrivers/vga64controller.cpp
++++ b/dispdrivers/vga64controller.cpp
+@@ -508,6 +508,43 @@
+   auto mode = paintState().paintOptions.mode;
+   auto getPixel = getPixelLambda(mode);
+   auto setRowPixel = setRowPixelLambda(mode);
++  // karabas: 8-pixel glyph (text) fully inside the clipping rectangle at an aligned X: the glyph row
++  // goes out as whole bytes. Same result as genericDrawGlyph_light, without its per-pixel loop.
++  if (mode == PaintMode::Set && glyph.width == 8 && glyphOptions.fillBackground && !glyphOptions.bold && !glyphOptions.italic &&
++      !glyphOptions.blank && !glyphOptions.underline && !glyphOptions.doubleWidth) {
++    auto const & ps = paintState();
++    const int gx = glyph.X + ps.origin.X, gy = glyph.Y + ps.origin.Y;
++    if (gx >= ps.absClippingRect.X1 && gx + 7 <= ps.absClippingRect.X2 && gy >= ps.absClippingRect.Y1 &&
++        gy + glyph.height - 1 <= ps.absClippingRect.Y2 && (gx & 0) == 0) {
++    updateRect = updateRect.merge(Rect(gx, gy, gx + 7, gy + glyph.height - 1));
++    hideSprites(updateRect);
++    if (glyphOptions.invert ^ ps.paintOptions.swapFGBG)
++      tswap(penColor, brushColor);
++    if (glyphOptions.reduceLuminosity) {
++      if (penColor.R > 128) penColor.R = 128;
++      if (penColor.G > 128) penColor.G = 128;
++      if (penColor.B > 128) penColor.B = 128;
++    }
++    const uint8_t pen = getPixel(penColor), brush = getPixel(brushColor);
++    for (int y = 0; y < glyph.height; ++y) {
++      uint8_t b = glyph.data[y];
++      uint8_t * row = (uint8_t*) m_viewPort[gy + y];
++      for (int x = 0; x < 8; ++x, b <<= 1)
++        VGA_PIXELINROW(row, gx + x) = (b & 0x80) ? pen : brush;
++    }
++    return;
++    }
++  }
++  // karabas: PaintMode::Set (text) with an inlined pixel setter instead of a std::function call
++  // per pixel (the generic path, for the glyphs the fast path above does not take)
++  if (mode == PaintMode::Set) {
++    genericDrawGlyph(glyph, glyphOptions, penColor, brushColor, updateRect,
++                     getPixel,
++                     [&] (int y) { return (uint8_t*) m_viewPort[y]; },
++                     [] (uint8_t * row, int x, uint8_t value) { VGA_PIXELINROW(row, x) = value; }
++                    );
++    return;
++  }
+   genericDrawGlyph(glyph, glyphOptions, penColor, brushColor, updateRect,
+                    getPixel,
+                    [&] (int y) { return (uint8_t*) m_viewPort[y]; },

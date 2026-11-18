@@ -1,0 +1,19 @@
+--- a/dispdrivers/vga8controller.cpp
++++ b/dispdrivers/vga8controller.cpp
+@@ -500,6 +500,16 @@
+   auto mode = paintState().paintOptions.mode;
+   auto getPixel = getPixelLambda(mode);
+   auto setRowPixel = setRowPixelLambda(mode);
++  // karabas: PaintMode::Set (text) with an inlined pixel setter instead of a std::function call
++  // per pixel (the generic path, for the glyphs the fast path above does not take)
++  if (mode == PaintMode::Set) {
++    genericDrawGlyph(glyph, glyphOptions, penColor, brushColor, updateRect,
++                     getPixel,
++                     [&] (int y) { return (uint8_t*) m_viewPort[y]; },
++                     [] (uint8_t * row, int x, uint8_t value) { VGA8_SETPIXELINROW(row, x, value); }
++                    );
++    return;
++  }
+   genericDrawGlyph(glyph, glyphOptions, penColor, brushColor, updateRect,
+                    getPixel,
+                    [&] (int y) { return (uint8_t*) m_viewPort[y]; },

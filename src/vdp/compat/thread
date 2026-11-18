@@ -1,0 +1,54 @@
+// <thread> for the bare-metal VDP: std::thread = a cooperative task (coop.h), always detached
+// in practice (userspace-vdp-gl only uses detach()). sleep_for yields to the other tasks.
+#pragma once
+#include <chrono>
+#include <functional>
+#include <tuple>
+#include <utility>
+#include <type_traits>
+#include "coop.h"
+
+#ifndef KG_THREAD_STACK
+#define KG_THREAD_STACK 16384
+#endif
+
+namespace std {
+
+class thread {
+public:
+    thread() noexcept {}
+    template <class F, class... A>
+    explicit thread(F &&f, A &&...a) {
+        auto *fn = new std::function<void()>(
+            [f = std::decay_t<F>(std::forward<F>(f)), t = std::make_tuple(std::decay_t<A>(std::forward<A>(a))...)]() mutable {
+                std::apply(f, t);
+            });
+        m_id = coop_spawn_named(&thread::run, fn, KG_THREAD_STACK, "std::thread");
+    }
+    thread(const thread &) = delete;
+    thread &operator=(const thread &) = delete;
+    thread(thread &&o) noexcept : m_id(o.m_id) { o.m_id = -1; }
+    thread &operator=(thread &&o) noexcept { m_id = o.m_id; o.m_id = -1; return *this; }
+    ~thread() {}
+    bool joinable() const noexcept { return false; }
+    void detach() { m_id = -1; }
+    void join() {}
+private:
+    static void run(void *p) {
+        auto *fn = static_cast<std::function<void()> *>(p);
+        (*fn)();
+        delete fn;
+    }
+    int m_id = -1;
+};
+
+namespace this_thread {
+template <class R, class P>
+inline void sleep_for(const chrono::duration<R, P> &d) {
+    auto us = chrono::duration_cast<chrono::microseconds>(d).count();
+    coop_sleep_us(us > 0 ? (uint64_t)us : 0);
+}
+inline void yield() noexcept { coop_yield(); }
+} // namespace this_thread
+
+} // namespace std
