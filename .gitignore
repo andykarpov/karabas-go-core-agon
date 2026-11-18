@@ -96,3 +96,4 @@ src/sim/iss
 src/oracle/build/
 src/oracle/target/
 src/sim/cpu/build/
+src/sim/cpu/build-ez80/

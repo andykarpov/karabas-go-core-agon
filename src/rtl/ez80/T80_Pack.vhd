@@ -102,7 +102,7 @@ package T80_Pack is
 		DInst           : in std_logic_vector(7 downto 0);
 		DI              : in std_logic_vector(7 downto 0);
 		DO              : out std_logic_vector(7 downto 0);
-		MC              : out std_logic_vector(2 downto 0);
+		MC              : out std_logic_vector(3 downto 0);
 		TS              : out std_logic_vector(2 downto 0);
 		IntCycle_n      : out std_logic;
 		IntE            : out std_logic;
@@ -167,13 +167,17 @@ package T80_Pack is
 		ADLm                    : in  std_logic := '0';
 		Suffix                  : out std_logic;
 		EzOp                    : out std_logic_vector(3 downto 0);
+		IOA0                    : out std_logic;
+		UOp                     : out std_logic_vector(1 downto 0);
+		BusBU                   : out std_logic;
+		LDU                     : out std_logic;
 		ISet                    : in  std_logic_vector(1 downto 0);
-		MCycle                  : in  std_logic_vector(2 downto 0);
+		MCycle                  : in  std_logic_vector(3 downto 0);
 		F                       : in  std_logic_vector(7 downto 0);
 		NMICycle                : in  std_logic;
 		IntCycle                : in  std_logic;
 		XY_State                : in  std_logic_vector(1 downto 0);
-		MCycles                 : out std_logic_vector(2 downto 0);
+		MCycles                 : out std_logic_vector(3 downto 0);
 		TStates                 : out std_logic_vector(2 downto 0);
 		Prefix                  : out std_logic_vector(1 downto 0); -- None,BC,ED,DD/FD
 		Inc_PC                  : out std_logic;

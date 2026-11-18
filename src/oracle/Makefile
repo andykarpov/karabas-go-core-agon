@@ -7,8 +7,22 @@ EMU  := ../../upstream/fab-agon-emulator
 CR   := build/agon-ez80-emulator
 CARGO ?= $(HOME)/.cargo/bin/cargo
 
-all: $(CR)/.ready
+EZ   := build/ez80
+EZREV := 13c151e89f520b3bae3343bea9d67d06e8037cfa
+
+all: $(CR)/.ready $(EZ)/.ready
 	$(CARGO) build -q --release
+
+# karabas: the ez80 crate (tomm/ez80, MIT) with our fixes where it differs from CEmu / UM0077,
+# used through [patch] in Cargo.toml by both the emulator crate and the oracle
+$(EZ)/.ready: Makefile
+	rm -rf ./build/ez80
+	git clone -q https://github.com/tomm/ez80.git $(EZ)
+	git -C $(EZ) checkout -q $(EZREV)
+	# IN0 r,(n): flags as IN r,(C) (S, Z, P parity, H = N = 0, C kept), not as a subtraction
+	sed -i 's/env.state.reg.update_arithmetic_flags(data as u16, data as u16, data as u16, true, false); /env.state.reg.update_bits_in_flags(data); \/\/ karabas: IN0 flags (CEmu, UM0077)/' $(EZ)/src/opcode_io.rs
+	grep -q 'karabas: IN0 flags' $(EZ)/src/opcode_io.rs
+	touch $@
 
 $(CR)/.ready: $(EMU)/agon-ez80-emulator/Cargo.toml $(wildcard $(EMU)/agon-ez80-emulator/src/*.rs) kg_trace.rs Makefile
 	mkdir -p build

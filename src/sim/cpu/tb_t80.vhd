@@ -35,7 +35,7 @@ architecture rtl of tb_t80 is
 	signal Write      : std_logic;
 	signal IORQ       : std_logic;
 	signal DI_Reg     : std_logic_vector(7 downto 0);
-	signal MCycle     : std_logic_vector(2 downto 0);
+	signal MCycle     : std_logic_vector(3 downto 0);
 	signal TState     : std_logic_vector(2 downto 0);
 begin
 	u0 : T80
@@ -55,7 +55,7 @@ begin
 			DI_Reg <= "00000000";
 		elsif rising_edge(clk) then
 			rd_n <= '1'; wr_n <= '1'; iorq_n <= '1'; mreq_n <= '1';
-			if MCycle = "001" then
+			if MCycle = "0001" then
 				if TState = "001" then
 					rd_n <= not IntCycle_n;
 					mreq_n <= not IntCycle_n;

@@ -116,7 +116,7 @@ entity T80 is
 		DInst      : in  std_logic_vector(7 downto 0);
 		DI         : in  std_logic_vector(7 downto 0);
 		DO         : out std_logic_vector(7 downto 0);
-		MC         : out std_logic_vector(2 downto 0);
+		MC         : out std_logic_vector(3 downto 0);
 		TS         : out std_logic_vector(2 downto 0);
 		IntCycle_n : out std_logic;
 		IntE       : out std_logic;
@@ -154,10 +154,17 @@ architecture rtl of T80 is
 	signal SPcurU               : std_logic_vector(7 downto 0);  -- its address upper byte
 	signal RegBusAU, RegBusBU, RegBusCU, RegDIU : std_logic_vector(7 downto 0);
 	signal RegWEU               : std_logic;
+	signal RegWEU_rd            : std_logic;  -- upper byte write of a memory read (UOp)
+	signal RegWEU_id            : std_logic;  -- upper byte write of a 24-bit pair inc / dec
+	signal RegWEU_xw            : std_logic;  -- upper byte write of EX (SP),HL
 	signal DORU                 : std_logic_vector(63 downto 0);
 	signal ID24                 : unsigned(23 downto 0);
 	signal Suffix               : std_logic;
 	signal EzOp                 : std_logic_vector(3 downto 0);
+	signal IOA0                 : std_logic;
+	signal UOp, UOp_r           : std_logic_vector(1 downto 0);
+	signal BusBU                : std_logic;
+	signal LDU                  : std_logic;
 
 	signal RegDIH               : std_logic_vector(7 downto 0);
 	signal RegDIL               : std_logic_vector(7 downto 0);
@@ -187,7 +194,7 @@ architecture rtl of T80 is
 	signal Save_Mux             : std_logic_vector(7 downto 0);
 
 	signal TState               : unsigned(2 downto 0);
-	signal MCycle               : std_logic_vector(2 downto 0);
+	signal MCycle               : std_logic_vector(3 downto 0);
 	signal IntE_FF1             : std_logic;
 	signal IntE_FF2             : std_logic;
 	signal Halt_FF              : std_logic;
@@ -200,7 +207,7 @@ architecture rtl of T80 is
 	signal DI_Reg               : std_logic_vector(7 downto 0);
 	signal T_Res                : std_logic;
 	signal XY_State             : std_logic_vector(1 downto 0);
-	signal Pre_XY_F_M           : std_logic_vector(2 downto 0);
+	signal Pre_XY_F_M           : std_logic_vector(3 downto 0);
 	signal NextIs_XY_Fetch      : std_logic;
 	signal XY_Ind               : std_logic;
 	signal No_BTR               : std_logic;
@@ -223,10 +230,10 @@ architecture rtl of T80 is
 	signal ALU_Op_r             : std_logic_vector(3 downto 0);
 	signal Save_ALU_r           : std_logic;
 	signal PreserveC_r          : std_logic;
-	signal MCycles              : std_logic_vector(2 downto 0);
+	signal MCycles              : std_logic_vector(3 downto 0);
 
 	-- Micro code outputs
-	signal MCycles_d            : std_logic_vector(2 downto 0);
+	signal MCycles_d            : std_logic_vector(3 downto 0);
 	signal TStates              : std_logic_vector(2 downto 0);
 	signal IntCycle             : std_logic;
 	signal NMICycle             : std_logic;
@@ -336,6 +343,10 @@ begin
 			ADLm        => ADL,
 			Suffix      => Suffix,
 			EzOp        => EzOp,
+			IOA0        => IOA0,
+			UOp         => UOp,
+			BusBU       => BusBU,
+			LDU         => LDU,
 			ISet        => ISet,
 			MCycle      => MCycle,
 			F           => F,
@@ -431,8 +442,8 @@ begin
 
 	NextIs_XY_Fetch <= '1' when XY_State /= "00" and XY_Ind = '0' and
 							((Set_Addr_To = aXY) or
-							(MCycle = "001" and IR = "11001011") or
-							(MCycle = "001" and IR = "00110110")) else '0';
+							(MCycle = "0001" and IR = "11001011") or
+							(MCycle = "0001" and IR = "00110110")) else '0';
 
 	Save_Mux <= BusB when ExchangeRp = '1' else
 		DI_Reg when Save_ALU_r = '0' else
@@ -455,7 +466,7 @@ begin
 			ISet <= "00";
 			XY_State <= "00";
 			IStatus <= "00";
-			MCycles <= "000";
+			MCycles <= "0000";
 			DO <= "00000000";
 
 			ACC <= (others => '1');
@@ -470,9 +481,13 @@ begin
 			I <= (others => '0');
 			R <= (others => '0');
 			SP <= (others => '1');
+			if EZ80 /= 0 then
+				SP <= (others => '0'); -- karabas: eZ80 SPS = 0 after reset (CEmu and the oracle agree)
+			end if;
 			Alternate <= '0';
 
 			Read_To_Reg_r <= "00000";
+			UOp_r <= "00"; -- karabas
 			Arith16_r <= '0';
 			BTR_r <= '0';
 			Z16_r <= '0';
@@ -500,10 +515,11 @@ begin
 				ALU_Op_r <= "0000";
 				Save_ALU_r <= '0';
 				Read_To_Reg_r <= "00000";
+				UOp_r <= "00"; -- karabas
 
 				MCycles <= MCycles_d;
 
-				if LDHLSP = '1' and MCycle = "011" and TState = 1 then
+				if LDHLSP = '1' and MCycle = "0011" and TState = 1 then
 					temp_c := unsigned('0'&SP(7 downto 0))+unsigned('0'&Save_Mux);
 					temp_h := unsigned('0'&SP(3 downto 0))+unsigned('0'&Save_Mux(3 downto 0));
 					F(Flag_Z) <= '0';
@@ -529,13 +545,14 @@ begin
 
 				Arith16_r <= Arith16;
 				PreserveC_r <= PreserveC;
-				if ISet = "10" and ALU_OP(2) = '0' and ALU_OP(0) = '1' and MCycle = "011" then
+				if ISet = "10" and ALU_OP(2) = '0' and ALU_OP(0) = '1' and (MCycle = "0011" or
+						(Ez = '1' and UOp = "01" and MCycle = "0100")) then -- karabas: 24-bit Z
 					Z16_r <= '1';
 				else
 					Z16_r <= '0';
 				end if;
 
-				if MCycle  = "001" and TState(2) = '0' then
+				if MCycle  = "0001" and TState(2) = '0' then
 				-- MCycle = 1 and TState = 1, 2, or 3
 
 					if TState = 2 and Wait_n = '1' then
@@ -600,7 +617,7 @@ begin
 				else
 				-- either (MCycle > 1) OR (MCycle = 1 AND TState > 3)
 
-					if MCycle = "110" then
+					if MCycle = "1110" then
 						XY_Ind <= '1';
 						if Prefix = "01" then
 							ISet <= "01";
@@ -651,7 +668,7 @@ begin
 						elsif MCycle = MCycles and NMICycle = '1' then
 							A <= "0000000001100110";
 							PC <= "0000000001100110";
-						elsif ((Mode /= 3 and MCycle = "011") or (Mode = 3 and MCycle = "100"))
+						elsif ((Mode /= 3 and MCycle = "0011") or (Mode = 3 and MCycle = "0100"))
 							and IntCycle = '1' and IStatus = "10" then
 							A(15 downto 8) <= I;
 							A(7 downto 0) <= WZ(7 downto 0);
@@ -681,6 +698,9 @@ begin
 									A(15 downto 8) <= DI_Reg;
 								else
 									A(15 downto 8) <= ACC;
+								end if;
+								if IOA0 = '1' then -- karabas: IN0 / OUT0
+									A(15 downto 8) <= (others => '0');
 								end if;
 								A(7 downto 0) <= DI_Reg;
 								AU_r <= (others => '0'); -- karabas: I/O
@@ -716,7 +736,14 @@ begin
 							when aZI =>
 								if Inc_WZ = '1' then
 									A <= std_logic_vector(unsigned(WZ) + 1);
-									-- karabas: the next byte of a (nn) word; nn was 24-bit if IL
+									-- karabas: the next byte of a (nn) word: WZ moves on (a third byte
+									-- follows with L), 24-bit with L
+									if Ez = '1' then
+										WZ <= std_logic_vector(unsigned(WZ) + 1);
+										if L_s = '1' and WZ = x"FFFF" then
+											WZU <= std_logic_vector(unsigned(WZU) + 1);
+										end if;
+									end if;
 									if L_s = '0' then AU_r <= MBASE;
 									elsif WZ = x"FFFF" then AU_r <= std_logic_vector(unsigned(WZU) + 1);
 									else AU_r <= WZU; end if;
@@ -811,7 +838,7 @@ begin
 					end if;
 
 					if TState = 2 and Wait_n = '1' then
-						if ISet = "01" and MCycle = "111" then
+						if ISet = "01" and MCycle = "1111" then
 							IR <= DInst;
 						end if;
 						if JumpE = '1' then
@@ -839,9 +866,10 @@ begin
 						if RstP = '1' then
 							WZ <= (others =>'0');
 							WZ(5 downto 3) <= IR(5 downto 3);
+							WZU <= (others => '0'); -- karabas
 						end if;
 					end if;
-					if TState = 3 and MCycle = "110" then
+					if TState = 3 and MCycle = "1110" then
 						WZ <= std_logic_vector(signed(RegBusC) + signed(DI_Reg));
 						if Ez = '1' then -- karabas: the upper byte of IX+d / IY+d
 							if DI_Reg(7) = '0' and unsigned(RegBusC) + unsigned(DI_Reg) > 16#FFFF# then
@@ -854,13 +882,13 @@ begin
 						end if;
 					end if;
 
-					if MCycle = "011" and TState = 4 and No_BTR = '0' then
+					if MCycle = "0011" and TState = 4 and No_BTR = '0' then
 						if I_BT = '1' or I_BC = '1' then
 							WZ <= std_logic_vector(PC)-"1";
 						end if;
 					end if;
 
-					if (TState = 2 and Wait_n = '1') or (TState = 4 and MCycle = "001") then
+					if (TState = 2 and Wait_n = '1') or (TState = 4 and MCycle = "0001") then
 						if IncDec_16(2 downto 0) = "111" then
 							if Ez = '1' and L_s = '1' then -- karabas: SPL
 								if IncDec_16(3) = '1' then
@@ -905,6 +933,9 @@ begin
 					end if;
 					if LDW = '1' then
 						WZ(15 downto 8) <= DI_Reg;
+					end if;
+					if LDU = '1' then -- karabas
+						WZU <= DI_Reg;
 					end if;
 
 					-- karabas: eZ80 register operations
@@ -968,6 +999,9 @@ begin
 						end if;
 					else
 						F(7 downto 1) <= F_Out(7 downto 1);
+						if Ez = '1' and UOp_r = "01" then
+							F(Flag_H) <= F(Flag_H); -- karabas: H of 24-bit ops stays from bit 12
+						end if;
 						if PreserveC_r = '0' then
 							F(Flag_C) <= F_Out(0);
 						end if;
@@ -1007,6 +1041,7 @@ begin
 				if T_Res = '1' then
 					Read_To_Reg_r(3 downto 0) <= Set_BusA_To;
 					Read_To_Reg_r(4) <= Read_To_Reg;
+					UOp_r <= UOp; -- karabas
 					if Read_To_Acc = '1' then
 						Read_To_Reg_r(3 downto 0) <= "0111";
 						Read_To_Reg_r(4) <= '1';
@@ -1036,10 +1071,13 @@ begin
 					when "10110" =>
 						DO <= Save_Mux;
 					when "11000" =>
-						if Ez = '1' and L_s = '1' then SPL(7 downto 0) <= unsigned(Save_Mux); -- karabas
+						if Ez = '1' and UOp_r = "01" then SPL(23 downto 16) <= unsigned(Save_Mux); -- karabas
+						elsif Ez = '1' and L_s = '1' then SPL(7 downto 0) <= unsigned(Save_Mux);
 						else SP(7 downto 0) <= unsigned(Save_Mux); end if;
 					when "11001" =>
-						if Ez = '1' and L_s = '1' then SPL(15 downto 8) <= unsigned(Save_Mux);
+						if Ez = '1' and L_s = '1' then
+							SPL(15 downto 8) <= unsigned(Save_Mux);
+							if UOp_r = "10" then SPL(23 downto 16) <= (others => '0'); end if;
 						else SP(15 downto 8) <= unsigned(Save_Mux); end if;
 					when "11011" =>
 						if Mode = 3 then
@@ -1121,15 +1159,17 @@ begin
 				if (JumpXY = '1' or LDSPHL = '1') then
 					RegAddrC <= Alternate & "10";
 				end if;
-				if ((JumpXY = '1' or LDSPHL = '1') and XY_State /= "00") or (MCycle = "110") then
+				if ((JumpXY = '1' or LDSPHL = '1') and XY_State /= "00") or (MCycle = "1110") then
 					RegAddrC <= XY_State(1) & "11";
 				end if;
 
 				if I_DJNZ = '1' and Save_ALU_r = '1' and Mode < 2 then
 					IncDecZ <= F_Out(Flag_Z);
 				end if;
-				if (TState = 2 or (TState = 3 and MCycle = "001")) and IncDec_16(2 downto 0) = "100" then
-					if ID16 = 0 then
+				if (TState = 2 or (TState = 3 and MCycle = "0001")) and IncDec_16(2 downto 0) = "100" then
+					if (Ez = '0' or L_s = '0') and ID16 = 0 then
+						IncDecZ <= '0';
+					elsif Ez = '1' and L_s = '1' and ID24 = 0 then -- karabas: 24-bit BC = 0
 						IncDecZ <= '0';
 					else
 						IncDecZ <= '1';
@@ -1144,9 +1184,9 @@ begin
 	RegAddrA <=
 			-- 16 bit increment/decrement
 			Alternate & IncDec_16(1 downto 0) when (TState = 2 or
-				(TState = 3 and MCycle = "001" and IncDec_16(2) = '1')) and XY_State = "00" else
+				(TState = 3 and MCycle = "0001" and IncDec_16(2) = '1')) and XY_State = "00" else
 			XY_State(1) & "11" when (TState = 2 or
-				(TState = 3 and MCycle = "001" and IncDec_16(2) = '1')) and IncDec_16(1 downto 0) = "10" else
+				(TState = 3 and MCycle = "0001" and IncDec_16(2) = '1')) and IncDec_16(1 downto 0) = "10" else
 			-- EX HL,DL
 			Alternate & "10" when ExchangeDH = '1' and TState = 3 else
 			Alternate & "01" when (ExchangeDH = '1' or I_MULU = '1') and TState = 4 else
@@ -1168,17 +1208,26 @@ begin
 	ID16 <= signed(RegBusA) - 1 when IncDec_16(3) = '1' else
 			signed(RegBusA) + 1;
 
-	process (Save_ALU_r, Auto_Wait_t1, ALU_OP_r, Read_To_Reg_r, I_MULU, T_Res,
+	process (Save_ALU_r, Auto_Wait_t1, ALU_OP_r, Read_To_Reg_r, I_MULU, T_Res, UOp_r,
 			ExchangeDH, ExchangeWH, IncDec_16, MCycle, TState, Wait_n, LDHLSP)
 	begin
 		RegWEH <= '0';
 		RegWEL <= '0';
+		RegWEU_rd <= '0';
 		if (TState = 1 and Save_ALU_r = '0' and Auto_Wait_t1 = '0') or
 			(Save_ALU_r = '1' and ALU_OP_r /= "0111") then
 			case Read_To_Reg_r is
 			when "10000" | "10001" | "10010" | "10011" | "10100" | "10101" =>
 				RegWEH <= not Read_To_Reg_r(0);
 				RegWEL <= Read_To_Reg_r(0);
+				-- karabas: the upper byte instead (01), or cleared with the high byte (10)
+				if UOp_r = "01" then
+					RegWEH <= '0';
+					RegWEL <= '0';
+					RegWEU_rd <= '1';
+				elsif UOp_r = "10" then
+					RegWEU_rd <= '1';
+				end if;
 			when others =>
 			end case;
 		end if;
@@ -1193,12 +1242,12 @@ begin
 			RegWEL <= '1';
 		end if;
 
-		if ((LDHLSP = '1' and MCycle = "010") or ExchangeWH = '1') and TState = 4 then
+		if ((LDHLSP = '1' and MCycle = "0010") or ExchangeWH = '1') and TState = 4 then
 			RegWEH <= '1';
 			RegWEL <= '1';
 		end if;
 
-		if IncDec_16(2) = '1' and ((TState = 2 and Wait_n = '1' and MCycle /= "001") or (TState = 3 and MCycle = "001")) then
+		if IncDec_16(2) = '1' and ((TState = 2 and Wait_n = '1' and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) then
 			case IncDec_16(1 downto 0) is
 			when "00" | "01" | "10" =>
 				RegWEH <= '1';
@@ -1209,10 +1258,15 @@ begin
 	end process;
 
 	TmpAddr2 <= std_logic_vector(unsigned(signed(SP) + signed(Save_Mux)));
-	-- karabas: upper register byte writes (filled in by the 24-bit operations)
-	RegWEU <= '0';
-	RegDIU <= (others => '0');
-	ID24 <= (others => '0');
+	-- karabas: upper register byte writes: a UOp read / ALU result, or a 24-bit pair inc / dec (L)
+	ID24 <= unsigned(RegBusAU & RegBusA) - 1 when IncDec_16(3) = '1' else unsigned(RegBusAU & RegBusA) + 1;
+	RegWEU_id <= '1' when Ez = '1' and L_s = '1' and IncDec_16(2) = '1' and IncDec_16(1 downto 0) /= "11" and
+	                      ((TState = 2 and Wait_n = '1' and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) else '0';
+	RegWEU_xw <= '1' when Ez = '1' and L_s = '1' and ExchangeWH = '1' and TState = 4 else '0'; -- EX (SP),HL
+	RegWEU <= (RegWEU_rd and Ez) or RegWEU_id or RegWEU_xw;
+	RegDIU <= std_logic_vector(ID24(23 downto 16)) when RegWEU_id = '1' else
+	          WZU when RegWEU_xw = '1' else
+	          Save_Mux when UOp_r = "01" else (others => '0');
 
 	process (Save_Mux, RegBusB, RegBusA_r, ID16, I_MULU, MULU_Prod32, MULU_tmp, T_Res,
 			ExchangeDH, ExchangeWH, IncDec_16, MCycle, TState, Wait_n, LDHLSP, TmpAddr2, WZ)
@@ -1230,7 +1284,7 @@ begin
 			end if;
 		end if;
 
-		if LDHLSP = '1' and MCycle = "010" and TState = 4 then
+		if LDHLSP = '1' and MCycle = "0010" and TState = 4 then
 			RegDIH <= TmpAddr2(15 downto 8);
 			RegDIL <= TmpAddr2(7 downto 0);
 		end if;
@@ -1247,7 +1301,7 @@ begin
 			RegDIH <= WZ(15 downto 8);
 			RegDIL <= WZ(7 downto 0);
 		end if;
-		if IncDec_16(2) = '1' and ((TState = 2 and MCycle /= "001") or (TState = 3 and MCycle = "001")) then
+		if IncDec_16(2) = '1' and ((TState = 2 and MCycle /= "0001") or (TState = 3 and MCycle = "0001")) then
 			RegDIH <= std_logic_vector(ID16(15 downto 8));
 			RegDIL <= std_logic_vector(ID16(7 downto 0));
 		end if;
@@ -1321,6 +1375,17 @@ begin
 				when others =>
 					BusB <= "--------";
 				end case;
+				-- karabas: the upper byte of the pair / SP / PC
+				if Ez = '1' and BusBU = '1' then
+					case Set_BusB_To is
+					when "1000" | "1001" =>
+						if L_s = '1' then BusB <= std_logic_vector(SPL(23 downto 16)); else BusB <= (others => '0'); end if;
+					when "1100" | "1101" =>
+						BusB <= PCU;
+					when others =>
+						BusB <= RegBusBU;
+					end case;
+				end if;
 
 				case Set_BusA_To is
 				when "0111" =>
@@ -1346,6 +1411,17 @@ begin
 					BusA <= DI_Reg;
 					BusB <= DI_Reg;
 				end if;
+				-- karabas: SP bytes of SPL with L; the upper bytes in a UOp 01 ALU cycle
+				if Ez = '1' and L_s = '1' then
+					if Set_BusA_To = "1000" then BusA <= std_logic_vector(SPL(7 downto 0)); end if;
+					if Set_BusA_To = "1001" then BusA <= std_logic_vector(SPL(15 downto 8)); end if;
+					if Set_BusB_To = "1000" and BusBU = '0' then BusB <= std_logic_vector(SPL(7 downto 0)); end if;
+					if Set_BusB_To = "1001" and BusBU = '0' then BusB <= std_logic_vector(SPL(15 downto 8)); end if;
+				end if;
+				if Ez = '1' and UOp = "01" and Save_ALU = '1' then
+					if Set_BusA_To(3) = '1' then BusA <= std_logic_vector(SPL(23 downto 16)); else BusA <= RegBusAU; end if;
+					if Set_BusB_To(3) = '1' then BusB <= std_logic_vector(SPL(23 downto 16)); else BusB <= RegBusBU; end if;
+				end if;
 			end if;
 		end if;
 	end process;
@@ -1361,7 +1437,7 @@ begin
 			RFSH_n <= '1';
 		elsif rising_edge(CLK_n) then
 			if DIRSet = '0' and CEN = '1' then
-				if MCycle = "001" and ((TState = 2  and Wait_n = '1') or TState = 3) then
+				if MCycle = "0001" and ((TState = 2  and Wait_n = '1') or TState = 3) then
 					RFSH_n <= '0';
 				else
 					RFSH_n <= '1';
@@ -1391,7 +1467,7 @@ begin
 	--   SetEI = '1'     EI sets IFF1/IFF2 on this T2 enable, too late for REG
 	--   IntCycle/NMICycle  interrupt acknowledge, not an instruction start
 	-- RETN needs no exclusion: I_RETN is decoded in its own M3.
-	InsnStart <= '1' when MCycle = "001" and TState = 2 and Prefix = "00" and Suffix = '0' and
+	InsnStart <= '1' when MCycle = "0001" and TState = 2 and Prefix = "00" and Suffix = '0' and
 	                      SetEI = '0' and IntCycle = '0' and NMICycle = '0' else '0';
 -------------------------------------------------------------------------
 --
@@ -1402,9 +1478,9 @@ begin
 		variable OldNMI_n : std_logic;
 	begin
 		if RESET_n = '0' then
-			MCycle <= "001";
+			MCycle <= "0001";
 			TState <= "000";
-			Pre_XY_F_M <= "000";
+			Pre_XY_F_M <= "0000";
 			Halt_FF <= '0';
 			--BusAck <= '0';
 			NMICycle <= '0';
@@ -1457,7 +1533,7 @@ begin
 					if IntCycle = '1' or NMICycle = '1' then
 						Halt_FF <= '0';
 					end if;
-					if MCycle = "001" and TState = 2 and Wait_n = '1' then
+					if MCycle = "0001" and TState = 2 and Wait_n = '1' then
 						M1_n <= '1';
 					end if;
 					if BusReq_s = '1' and BusAck = '1' then
@@ -1473,23 +1549,23 @@ begin
 							else
 								TState <= "001";
 								if (IntCycle = '1' and Mode = 3) then -- GB: read interrupt at MCycle 3
-									if (MCycle = "010") then
+									if (MCycle = "0010") then
 										M1_n <= '0';
 									else
 										M1_n <= '1';
 									end if;
 								end if;
 								if NextIs_XY_Fetch = '1' then
-									MCycle <= "110";
+									MCycle <= "1110";
 									Pre_XY_F_M <= MCycle;
 									if IR = "00110110" and Mode = 0 then
-										Pre_XY_F_M <= "010";
+										Pre_XY_F_M <= "0010";
 									end if;
-								elsif (MCycle = "111") or (MCycle = "110" and Mode = 1 and ISet /= "01") then
+								elsif (MCycle = "1111") or (MCycle = "1110" and Mode = 1 and ISet /= "01") then
 									MCycle <= std_logic_vector(unsigned(Pre_XY_F_M) + 1);
-								elsif (MCycle = MCycles) or No_BTR = '1' or (MCycle = "010" and I_DJNZ = '1' and IncDecZ = '1') then
+								elsif (MCycle = MCycles) or No_BTR = '1' or (MCycle = "0010" and I_DJNZ = '1' and IncDecZ = '1') then
 									M1_n <= '0';
-									MCycle <= "001";
+									MCycle <= "0001";
 									IntCycle <= '0';
 									NMICycle <= '0';
 									if NMI_s = '1' and Prefix = "00" and Suffix = '0' then
@@ -1522,5 +1598,5 @@ begin
 		end if;
 	end process;
 
-	Auto_Wait <= '1' when IntCycle = '1' and MCycle = "001" else '0';
+	Auto_Wait <= '1' when IntCycle = '1' and MCycle = "0001" else '0';
 end;
