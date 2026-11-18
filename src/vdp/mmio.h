@@ -22,5 +22,7 @@
 #define MMIO_SIMREQ  MMIO_REG(0x58) /* sim only. read: bit 0 = the sim wants the firmware to report and exit */
 #define MMIO_AUDIO   MMIO_REG(0x5c) /* read: free places in the audio FIFO (8-bit unsigned samples, 16384 Hz);
                                        write: one sample */
+#define MMIO_SCAN    MMIO_REG(0x60) /* write: the address of the frame description (kg_scanout.cpp), taken
+                                       by the scanout at the start of its next frame */
 /* On the board the eZ80 UART RX FIFO level drives CTS to the eZ80 (MOS waits on it); the ISS is a
    lossless pipe without flow control. */

@@ -4,6 +4,7 @@
 #include "Arduino.h"
 #include "vdp-console8.h"
 #include "mmio.h"
+#include "kg_scanout.h"
 
 bool vdp_debug_logging = KG_VDP_DEBUG;
 uint32_t startup_screen_mode = 0;
@@ -59,6 +60,7 @@ static void kg_vblank_task(void *) {
 		if (f != last) {
 			last = f;
 			fabgl::BaseDisplayController::vblankSignal.store(true);
+			kg_scanout_publish();
 		}
 		coop_yield();
 	}

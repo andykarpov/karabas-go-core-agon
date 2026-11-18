@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include "scan_decode.h"
 
 static const uint32_t SRAM_SIZE = 4u << 20, SDRAM_BASE = 0x10000000u, SDRAM_SIZE = 32u << 20;
 static std::vector<uint8_t> sram(SRAM_SIZE + 8), sdram(SDRAM_SIZE + 8);
@@ -58,6 +59,7 @@ int main(int argc, char **argv) {
     int nshot = 0;
     const char *shot_poll = nullptr;   // --shot-poll file.ppm: at the --stop-poll answer a screenshot, then exit
     bool sp_pend = false;
+    uint32_t scan_desc = 0;            // MMIO_SCAN: the frame description of the firmware (scan_decode.h)
     int stop_tag = -1;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--max")) max_instr = strtoull(argv[++i], 0, 10) * 1000000ull;
@@ -151,6 +153,7 @@ int main(int argc, char **argv) {
         if (a & 0x80000000u) {
             uint32_t o = a & 0xff;
             if (o == 0x00) { char c = (char)v; if (c == '\n') { printf("%s\n", line.c_str()); line.clear(); } else line += c; }
+            else if (o == 0x60) scan_desc = v;
             else if (o == 0x5c) { aud_level(); aud_wr++; if ((v & 0xff) != 0x80 && (v & 0xff) != 0x7f) aud_nonsilent++; }
             else if (o == 0x44) {
                 uint8_t b = v & 0xff;
@@ -180,6 +183,15 @@ int main(int argc, char **argv) {
                     fclose(pf);
                 }
                 printf("SHOT %s %ux%u at %llu us\n", name, w, h, (unsigned long long)(ninstr / ipu));
+                if (scan_desc && w && h) {
+                    // the frame as the scanout reads it (the description of the last vblank)
+                    std::vector<uint8_t> rgb; int sw = 0, sh = 0;
+                    bool ok = scan_decode(scan_desc, [&](uint32_t a) { int r; uint8_t *q = host(a, r); return q ? *q : (uint8_t)0; }, rgb, sw, sh);
+                    std::string sn = std::string(name) + ".scan.ppm";
+                    if (ok) { FILE *pf = fopen(sn.c_str(), "wb"); fprintf(pf, "P6\n%d %d\n255\n", sw, sh); fwrite(rgb.data(), 1, rgb.size(), pf); fclose(pf); }
+                    bool same = ok && (uint32_t)sw == w && (uint32_t)sh == h && !memcmp(rgb.data(), &sdram[0x01800000], rgb.size());
+                    printf("SCAN %s %dx%d: %s the screenshot\n", sn.c_str(), sw, sh, same ? "EQUAL to" : "DIFFERS from");
+                }
                 if (sp_pend) { sp_pend = false; want_exit = true; }
             }
             else if (o == 0x50) {

@@ -62,7 +62,7 @@ $(B)/link.ld: link.ld.in Makefile
 	@mkdir -p $(B)
 	sed -e 's/@ORG@/$(ORG)/' -e 's/@LEN@/$(LEN)/' $< > $@
 
-OBJS := $(B)/crt0.o $(B)/coop_switch.o $(B)/coop.o $(B)/syscalls.o $(B)/kg_vdp.o $(B)/kg_serial.o $(GL_OBJS)
+OBJS := $(B)/crt0.o $(B)/coop_switch.o $(B)/coop.o $(B)/syscalls.o $(B)/kg_vdp.o $(B)/kg_serial.o $(B)/kg_scanout.o $(GL_OBJS)
 $(B)/vdp.elf: $(OBJS) $(B)/link.ld
 	$(CROSS)g++ $(LDFLAGS) -T $(B)/link.ld -Wl,-Map,$(B)/vdp.map -o $@ $(OBJS) -lstdc++ -lm
 	$(CROSS)size $@
