@@ -66,6 +66,7 @@ module vdp_soc #(
 	input wire [7:0] ms_z,
 	input wire [7:0] ms_b,
 	input wire ms_wr,
+	input wire [31:0] dbg_ez,           // debug: { eZ80 reset_n, halt_n, 6'd0, PC } (clk_ez, sampled: MMIO 0x6c)
 	// audio
 	input wire aud_ce,
 	output reg [7:0] aud_out = 8'h80,
@@ -221,6 +222,8 @@ reg signed [8:0] ms_ax = 9'sd0, ms_ay = 9'sd0;
 reg signed [7:0] ms_az = 8'sd0;
 reg [2:0] ms_bt = 3'd0;
 reg ms_new = 1'b0;
+reg [31:0] dbg_ez_s = 32'd0, dbg_ez_q = 32'd0;   // (debug only: a torn word is harmless)
+always @(posedge clk) begin dbg_ez_s <= dbg_ez; dbg_ez_q <= dbg_ez_s; end
 reg ms_rd = 1'b0;
 function signed [8:0] sat9(input signed [8:0] a, input signed [7:0] d);
 	reg signed [9:0] t;
@@ -312,6 +315,7 @@ always @(posedge clk) begin
 			8'h58: io_dat <= { 31'd0, sim_req };
 			8'h5c: io_dat <= (1 << AUD_LOG2) - aud_n;
 			8'h64: begin io_dat <= { 23'd0, kb_n != 5'd0, kbf[kb_rp] }; kb_pop <= kb_n != 5'd0; end
+			8'h6c: io_dat <= dbg_ez_q;
 			8'h68: begin io_dat <= { ms_new, 2'b00, ms_bt, ms_az, ms_ay, ms_ax }; ms_rd <= 1'b1; end   // (new in bit 31)
 			default: io_dat <= 32'd0;
 			endcase

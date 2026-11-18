@@ -105,6 +105,7 @@ static void kg_kbd_task(void *) {
 		if (skip) { skip--; continue; }
 		if (b == 0xe0) { ext = true; continue; }
 		if (b == 0xf0) { rel = true; continue; }
+		if (!ext && b == 0x7e) { if (!rel) kg_dbg_on = !kg_dbg_on; rel = false; continue; }   // Scroll Lock: the debug overlay
 		if (b == 0xe1) {
 			skip = 7;
 			if (kb) { fabgl::VirtualKeyItem item = {}; item.down = 1; item.vk = fabgl::VK_PAUSE; kb->injectVirtualKey(item, true); }

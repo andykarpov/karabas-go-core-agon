@@ -22,6 +22,12 @@
 #undef protected
 #include "mmio.h"
 #include "kg_scanout.h"
+#include <cstdio>
+
+#ifndef KG_DBG_DEFAULT
+#define KG_DBG_DEFAULT 0
+#endif
+bool kg_dbg_on = KG_DBG_DEFAULT;
 
 namespace {
 const int MAXH = 1024, MAXPAL = 64, MAXSPR = 32;
@@ -45,6 +51,51 @@ uint8_t colour_of(fabgl::NativePixelFormat f, void *signals, int i) {
 	}
 }
 
+void add_entry(uint32_t *l, int xs, int ys, int dw, int dh, uint32_t a, int stride, int fm, bool x) {
+	uint32_t *e = &l[1 + 4 * l[0]++];
+	e[0] = (uint32_t)ys | (uint32_t)dh << 16;
+	e[1] = (uint32_t)xs | (uint32_t)dw << 16;
+	e[2] = a;
+	e[3] = (uint32_t)(stride & 0xffff) | (uint32_t)fm << 16 | (x ? 1u << 17 : 0u);
+}
+
+// the debug overlay: DBG_COLS x DBG_ROWS characters of 8x8, RGBA2222 (white on opaque black)
+const int DBG_COLS = 38, DBG_ROWS = 5, DBG_W = DBG_COLS * 8, DBG_H = DBG_ROWS * 8;
+uint8_t dbg_px[DBG_W * DBG_H];
+void dbg_text(int row, const char *t) {
+	const uint8_t *font = fabgl::FONT_8x8.data;
+	for (int c = 0; c < DBG_COLS; c++) {
+		uint8_t ch = *t ? (uint8_t)*t++ : ' ';
+		for (int y = 0; y < 8; y++) {
+			uint8_t bits = font[ch * 8 + y];
+			uint8_t *p = &dbg_px[(row * 8 + y) * DBG_W + c * 8];
+			for (int x = 0; x < 8; x++) p[x] = (bits & (0x80 >> x)) ? 0xff : 0xc0;
+		}
+	}
+}
+void dbg_hex(char *o, const uint8_t *ring, uint32_t n) {
+	// the last 12 bytes, the oldest first
+	for (int i = 0; i < 12; i++) {
+		uint32_t k = n - 12 + (uint32_t)i;
+		if (n < 12 && i < (int)(12 - n)) { o += sprintf(o, ".. "); continue; }
+		o += sprintf(o, "%02X ", ring[k & 15]);
+	}
+}
+void dbg_overlay(uint32_t *l, int w, int h) {
+	if (l[0] >= (uint32_t)MAXSPR) return;
+	char t[64], u[48];
+	uint32_t ez = MMIO_DBG_EZ;
+	snprintf(t, sizeof t, "EZ80 PC %06lX RST %c HALT %c", (unsigned long)(ez & 0xffffff), (ez >> 31) ? '1' : '0', ((ez >> 30) & 1) ? '1' : '0');
+	dbg_text(0, t);
+	snprintf(t, sizeof t, "RX %lu  TX %lu  FR %lu", (unsigned long)kg_dbg_rx_n, (unsigned long)kg_dbg_tx_n, (unsigned long)MMIO_FRAME);
+	dbg_text(1, t);
+	dbg_hex(u, kg_dbg_rx, kg_dbg_rx_n); snprintf(t, sizeof t, "R %s", u); dbg_text(2, t);
+	dbg_hex(u, kg_dbg_tx, kg_dbg_tx_n); snprintf(t, sizeof t, "T %s", u); dbg_text(3, t);
+	snprintf(t, sizeof t, "STAT %08lX", (unsigned long)MMIO_EZ_STAT); dbg_text(4, t);
+	int dw = DBG_W < w ? DBG_W : w, dh = DBG_H < h ? DBG_H : h;
+	add_entry(l, 0, h - dh, dw, dh, (uint32_t)(uintptr_t)dbg_px + (uint32_t)((DBG_H - dh) * DBG_W), DBG_W, 0, false);
+}
+
 // one sprite of the list, the way rawDrawSpriteScanline() draws it, clipped to the vw x vh picture:
 //   e[0] = its first line | lines << 16       e[1] = its first x | pixels << 16 (RGBA8888: <= 256)
 //   e[2] = the address of its first pixel    e[3] = the bytes of a row | RGBA8888 << 16 | XOR << 17
@@ -60,11 +111,7 @@ void add_sprite(uint32_t *l, fabgl::Sprite *s, int vw, int vh) {
 	int oy = s->y < 0 ? -s->y : 0, ys = s->y + oy, dh = (s->y + h < vh ? s->y + h : vh) - ys;
 	if (dw <= 0 || dh <= 0) return;
 	if (fm && dw > 256) dw = 256;      // (the RTL raw[] holds 1088 bytes)
-	uint32_t *e = &l[1 + 4 * l[0]++];
-	e[0] = (uint32_t)ys | (uint32_t)dh << 16;
-	e[1] = (uint32_t)xs | (uint32_t)dw << 16;
-	e[2] = (uint32_t)(uintptr_t)f->data + (uint32_t)((oy * w + ox) * bpp);
-	e[3] = (uint32_t)(w * bpp & 0xffff) | (uint32_t)fm << 16 | (x ? 1u << 17 : 0u);
+	add_entry(l, xs, ys, dw, dh, (uint32_t)(uintptr_t)f->data + (uint32_t)((oy * w + ox) * bpp), w * bpp, fm, x);
 }
 }
 
@@ -105,11 +152,12 @@ void kg_scanout_publish() {
 			if (t && t->visible) add_sprite(o.spr, t, w, h);
 			auto *m = pc->mouseCursor();
 			bool mv = m && m->visible;
-			for (int i = 0; i < pc->spritesCount() && o.spr[0] < (uint32_t)MAXSPR - (mv ? 1 : 0); i++) {
+			for (int i = 0; i < pc->spritesCount() && o.spr[0] < (uint32_t)MAXSPR - (mv ? 1 : 0) - (kg_dbg_on ? 1 : 0); i++) {
 				auto *sp = pc->getSprite(i);
 				if (sp->hardware && sp->visible && sp->allowDraw) add_sprite(o.spr, sp, w, h);
 			}
 			if (mv) add_sprite(o.spr, m, w, h);
+			if (kg_dbg_on) dbg_overlay(o.spr, w, h);
 		}
 	}
 	cur ^= 1;

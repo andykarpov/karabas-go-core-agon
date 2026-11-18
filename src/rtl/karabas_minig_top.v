@@ -297,6 +297,10 @@ always @(posedge clk_ez) { sys_ce, nco } <= { 1'b0, nco } + 17'd32212;
 wire ez_hold;
 kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_ez_hold (.clk(clk_ez), .d(areset | ld_active | sw_reset), .q(ez_hold));
 reg ez_reset_n = 1'b0;
+wire [127:0] ez_regx;
+wire ez_halt_n;
+reg [31:0] dbg_ez = 32'd0;                 // the VDP debug overlay (Scroll Lock): eZ80 state
+always @(posedge clk_ez) dbg_ez <= { ez_reset_n, ez_halt_n, 6'd0, ez_regx[23:0] };
 always @(posedge clk_ez) ez_reset_n <= ~(areset_ez | ez_hold);
 
 wire [23:0] maddr;
@@ -314,7 +318,7 @@ agon_ez80 ez (
 	.u0_tx_data(u0_tx_data), .u0_tx_valid(u0_tx_valid), .u0_tx_ready(u0_tx_ready),
 	.u0_rx_data(u0_rx_data), .u0_rx_valid(u0_rx_valid), .u0_rx_full(u0_rx_full), .u0_cts(u0_cts),
 	.sd_sck(ez_sd_sck), .sd_mosi(ez_sd_mosi), .sd_miso(SD_DO), .sd_cs_n(ez_sd_cs_n), .vsync(ez_vblank),
-	.insn(), .regx(), .regs(), .halt_n(), .dbg_io_rd(), .dbg_io_wr(), .dbg_io_d()
+	.insn(), .regx(ez_regx), .regs(), .halt_n(ez_halt_n), .dbg_io_rd(), .dbg_io_wr(), .dbg_io_d()
 );
 assign SD_CS_N = ez_sd_cs_n;
 assign SD_CLK = ez_sd_sck;
@@ -374,7 +378,7 @@ vdp_soc vdp (
 	.clk_pix(clk_pix), .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b), .vid_hs(vid_hs), .vid_vs(vid_vs),
 	.vid_de(vid_de), .vblank(v_vblank),
 	.ps2_code(ps2_code), .ps2_wr(ps2_wr & ~ps2_kind),
-	.ms_x(ms_x), .ms_y(ms_y), .ms_z(ms_z), .ms_b(ms_b), .ms_wr(ms_wr),
+	.ms_x(ms_x), .ms_y(ms_y), .ms_z(ms_z), .ms_b(ms_b), .ms_wr(ms_wr), .dbg_ez(dbg_ez),
 	.aud_ce(aud_ce), .aud_out(aud_out), .sim_shot_req(1'b0), .sim_req(1'b0), .sim_shot_wr(), .sim_shot(),
 	.dbg_con_wr(vdp_con_wr), .dbg_con(vdp_con), .dbg_exit(vdp_exit), .dbg_mark_wr(), .dbg_mark(),
 	.cpu_run(vdp_run), .dbg_rx_poll(), .dbg_iadr(), .dbg_io(), .dbg_bus(),

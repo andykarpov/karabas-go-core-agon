@@ -6,6 +6,10 @@
 #include "HardwareSerial.h"
 #include "coop.h"
 #include "mmio.h"
+#include "kg_scanout.h"
+
+uint32_t kg_dbg_rx_n, kg_dbg_tx_n;
+uint8_t kg_dbg_rx[16], kg_dbg_tx[16];
 
 HardwareSerial Serial2;
 FILE *dbg_serial_sink = nullptr;
@@ -17,6 +21,7 @@ static void kg_rx_pump(rigtorp::SPSCQueue<uint8_t> &q) {
 		uint32_t v = MMIO_EZ_RX;
 		if (!(v & 0x100)) break;
 		q.push((uint8_t)v);
+		kg_dbg_rx[kg_dbg_rx_n++ & 15] = (uint8_t)v;
 	}
 }
 
@@ -64,6 +69,7 @@ size_t HardwareSerial::write(uint8_t c) {
 	}
 	while (!(MMIO_EZ_STAT & 2)) coop_yield();
 	MMIO_EZ_TX = c;
+	kg_dbg_tx[kg_dbg_tx_n++ & 15] = c;
 	return 1;
 }
 // host-side hooks of the emulator, unused here
