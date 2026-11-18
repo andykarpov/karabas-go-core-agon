@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 SIM=$(pwd)
 R=$(cd ../../rtl && pwd)
 B=$SIM/build
-V="$R/vdp/vdp_soc.v $R/vdp/vdp_sdram.v $R/vexriscv/VexRiscv_16k.v"
+V="$R/vdp/vdp_soc.v $R/vdp/vdp_video.v $R/vdp/vdp_sdram.v $R/vexriscv/VexRiscv_16k.v"
 BIN=$B/obj/Vvdp_soc
 mkdir -p "$B"
 if [ ! -x "$BIN" ] || [ -n "$(find $V tb_vdp.cpp run.sh -newer "$BIN" 2>/dev/null)" ]; then

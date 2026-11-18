@@ -12,11 +12,12 @@
  bit 31, uncached); anything else reads 0. MMIO (word registers, mmio.h):
    00 W CON: debug console byte (dbg_con)          08 W EXIT: dbg_exit = { 1, code }
    0c R CYCLES: clocks since reset                 10 / 14 R US: microseconds since reset (64 bit)
-   18 R FRAME: vsync rising edges                  1c R MS: milliseconds since reset
+   18 R FRAME: vblank starts of the scanout                  1c R MS: milliseconds since reset
    40 R EZ_RX: { valid, byte } from the eZ80 (pops) 44 W EZ_TX: a byte to the eZ80
    48 R EZ_STAT: bit 0 a byte waiting, bit 1 room for a byte to the eZ80
    50 W MARK (dbg_mark)                            54 SHOT, 58 SIMREQ: simulation only (sim_* ports)
    5c R AUDIO: free places of the audio FIFO; W: one 8-bit sample (unsigned)
+   60 W SCAN: the address of the frame description (src/vdp/kg_scanout.cpp) for vdp_video
  Link: ez_rx_* = bytes from the eZ80 (into RX_DEPTH bytes), ez_cts = room above CTS_ROOM; ez_tx_* =
  bytes to the eZ80 (16). Audio: AUD_DEPTH samples, one leaves on each aud_ce (16384 Hz) as aud_out.
  Loader: the SDRAM is written from ld_* (a byte per write) while the CPU is held in reset.
@@ -44,8 +45,15 @@ module vdp_soc #(
 	output wire [7:0] ez_tx_data,
 	output wire ez_tx_valid,
 	input wire ez_tx_ready,
-	// video timing (for FRAME)
-	input wire vsync,
+	// the picture (vdp_video: 640x480@60 on clk_pix 25 MHz); vblank (clk) for the eZ80 PB1
+	input wire clk_pix,
+	output wire [1:0] vid_r,
+	output wire [1:0] vid_g,
+	output wire [1:0] vid_b,
+	output wire vid_hs,
+	output wire vid_vs,
+	output wire vid_de,
+	output wire vblank,
 	// audio
 	input wire aud_ce,
 	output reg [7:0] aud_out = 8'h80,
@@ -122,8 +130,11 @@ wire d_none = ~d_io & ~d_sd;
 
 // ------------------------------------------------------------------ SDRAM and its owner
 
-localparam [1:0] O_NONE = 2'd0, O_D = 2'd1, O_I = 2'd2, O_LD = 2'd3;
-reg [1:0] own = O_NONE;
+localparam [2:0] O_NONE = 3'd0, O_D = 3'd1, O_I = 3'd2, O_LD = 3'd3, O_V = 3'd4;
+reg [2:0] own = O_NONE;
+wire v_cyc;
+wire [29:0] v_adr;
+wire [2:0] v_cti;
 wire sd_ack;
 wire [31:0] sd_dat;
 reg sd_cyc, sd_we;
@@ -137,6 +148,7 @@ always @(*) begin
 	case (own)
 	O_D: begin sd_cyc = d_req; sd_we = d_we; sd_sel = d_sel; sd_adr = d_adr[22:0]; sd_cti = d_cti; sd_wdat = d_dat_o; end
 	O_I: begin sd_cyc = i_req; sd_we = 1'b0; sd_sel = 4'hF; sd_adr = i_adr[22:0]; sd_cti = i_cti; end
+	O_V: begin sd_cyc = v_cyc; sd_we = 1'b0; sd_sel = 4'hF; sd_adr = v_adr[22:0]; sd_cti = v_cti; end
 	O_LD: begin sd_cyc = ld_pend; sd_we = 1'b1; sd_sel = 4'b0001 << ld_a[1:0]; sd_adr = ld_a[24:2]; sd_cti = 3'd0; sd_wdat = {4{ld_d}}; end
 	default: ;
 	endcase
@@ -148,7 +160,8 @@ always @(posedge clk) begin
 		own <= ld_pend ? O_LD : O_NONE;
 		if (own == O_LD && sd_ack) own <= O_NONE;
 	end else if (own == O_NONE) begin
-		if (d_req && d_sd) own <= O_D;
+		if (v_cyc) own <= O_V;                   // the scanout first: it has a deadline
+		else if (d_req && d_sd) own <= O_D;
 		else if (i_req) own <= O_I;
 	end else if (sd_ack && sd_cti != 3'b010)
 		own <= O_NONE;
@@ -191,6 +204,7 @@ wire aud_pop = aud_ce & (aud_n != 0);
 // ------------------------------------------------------------------ MMIO
 
 reg [31:0] cycles = 32'd0, ms = 32'd0, frame = 32'd0;
+reg [31:0] scan_adr = 32'd0;
 reg [63:0] us = 64'd0;
 reg [6:0] us_div = 7'd0;
 reg [9:0] ms_div = 10'd0;
@@ -208,7 +222,7 @@ always @(posedge clk) begin
 	dbg_con_wr <= 1'b0; dbg_mark_wr <= 1'b0; sim_shot_wr <= 1'b0;
 	dbg_rx_poll <= io_go && !d_we && (io_off == 8'h40 || io_off == 8'h48);
 	if (io_go) dbg_io <= { d_we, io_off };
-	vs_q <= { vs_q[1:0], vsync };
+	vs_q <= { vs_q[1:0], vblank };
 	if (cpu_reset) begin
 		cycles <= 32'd0; us <= 64'd0; us_div <= 7'd0; ms <= 32'd0; ms_div <= 10'd0; frame <= 32'd0;
 	end else begin
@@ -238,6 +252,7 @@ always @(posedge clk) begin
 			8'h50: begin dbg_mark <= d_dat_o; dbg_mark_wr <= 1'b1; end
 			8'h54: begin sim_shot <= d_dat_o; sim_shot_wr <= 1'b1; end
 			8'h5c: begin aud_d <= d_dat_o[7:0]; aud_push <= !aud_n[AUD_LOG2]; end
+			8'h60: scan_adr <= d_dat_o;
 			default: ;
 			endcase
 		end else if (io_off == 8'h40) begin
@@ -274,6 +289,15 @@ always @(posedge clk) begin
 	if (ld_wr && !ld_pend) begin ld_pend <= 1'b1; ld_d <= ld_data; ld_a <= ld_addr; end
 	if (own == O_LD && sd_ack) ld_pend <= 1'b0;
 end
+
+// ------------------------------------------------------------------ the scanout
+
+vdp_video video (
+	.clk(clk), .reset(cpu_reset), .scan_adr(scan_adr),
+	.m_cyc(v_cyc), .m_adr(v_adr), .m_cti(v_cti), .m_ack((own == O_V) & sd_ack), .m_dat(sd_dat),
+	.vblank_sys(vblank),
+	.clk_pix(clk_pix), .r(vid_r), .g(vid_g), .b(vid_b), .hs(vid_hs), .vs(vid_vs), .de(vid_de)
+);
 
 // ------------------------------------------------------------------ CPU bus answers
 
