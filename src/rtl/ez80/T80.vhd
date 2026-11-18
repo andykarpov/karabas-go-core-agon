@@ -331,7 +331,10 @@ begin
 	SPcur <= SPL(15 downto 0) when SPA_L = '1' else SP;
 	SPcurU <= std_logic_vector(SPL(23 downto 16)) when SPA_L = '1' else MBASE;
 	AU <= AU_r;
-	REGX <= DORU & "0000" & IL_s & L_s & MADL & ADL & MBASE & std_logic_vector(SPL) & PCxU & std_logic_vector(PC);
+	-- (the upper bytes in the order of REG: with EXX done (Alternate) the banks 4..6 are BC / DE / HL)
+	REGX <= DORU & "0000" & IL_s & L_s & MADL & ADL & MBASE & std_logic_vector(SPL) & PCxU & std_logic_vector(PC) when Alternate = '0' else
+	        DORU(63 downto 56) & DORU(23 downto 0) & DORU(31 downto 24) & DORU(55 downto 32) &
+	        "0000" & IL_s & L_s & MADL & ADL & MBASE & std_logic_vector(SPL) & PCxU & std_logic_vector(PC);
 
 	REG <= IntE_FF2 & IntE_FF1 & IStatus & DOR & std_logic_vector(PC) & std_logic_vector(SP) & std_logic_vector(R) & I & Fp & Ap & F & ACC when Alternate = '0'
 			 else IntE_FF2 & IntE_FF1 & IStatus & DOR(127 downto 112) & DOR(47 downto 0) & DOR(63 downto 48) & DOR(111 downto 64) &
@@ -513,6 +516,8 @@ begin
 			SP <= (others => '1');
 			if EZ80 /= 0 then
 				SP <= (others => '0'); -- karabas: eZ80 SPS = 0 after reset (CEmu and the oracle agree)
+				Ap <= (others => '0'); -- and AF' = 0
+				Fp <= (others => '0');
 			end if;
 			Alternate <= '0';
 
@@ -692,22 +697,25 @@ begin
 								AU_r <= MBASE; PCU <= MBASE;
 							end if;
 						elsif Jump = '1' then
+							-- karabas: JP / RET: the new mode = L (CEmu cpu_jump(.., cpu.L)); with IL the
+							-- last byte read is the upper one (WZ = low / high), the target masked by L
 							if Ez = '1' and IL_s = '1' then
-								-- karabas: 24-bit jump: WZ = low / high, DI = upper; the mode becomes IL
 								A <= WZ;
 								PC <= unsigned(WZ);
-								AU_r <= DI_Reg;
-								PCU <= DI_Reg;
-								ADL <= '1';
+								if L_s = '1' then AU_r <= DI_Reg; PCU <= DI_Reg; else AU_r <= MBASE; PCU <= MBASE; end if;
+								ADL <= L_s;
 							else
 								A(15 downto 8) <= DI_Reg;
 								A(7 downto 0) <= WZ(7 downto 0);
 								PC(15 downto 8) <= unsigned(DI_Reg);
 								PC(7 downto 0) <= unsigned(WZ(7 downto 0));
-								AU_r <= MBASE;
-								PCU <= MBASE;
+								if Ez = '1' and L_s = '1' then
+									AU_r <= (others => '0'); PCU <= (others => '0');
+								else
+									AU_r <= MBASE; PCU <= MBASE;
+								end if;
 								if Ez = '1' then
-									ADL <= '0';
+									ADL <= L_s;
 								end if;
 							end if;
 						elsif JumpXY = '1' then
@@ -912,7 +920,9 @@ begin
 						if JumpE = '1' then
 							PC <= unsigned(signed(PC) + signed(DI_Reg));
 							WZ <= std_logic_vector(signed(PC) + signed(DI_Reg));
-							if Ez = '1' and ADL = '1' then -- karabas: JR / DJNZ in ADL: 24-bit
+							if Ez = '1' and ADL = '1' and L_s = '0' then
+								PCU <= (others => '0');  -- karabas: JR.S in ADL: the target masked to 16 bits
+							elsif Ez = '1' and ADL = '1' then -- karabas: JR / DJNZ in ADL: 24-bit
 								if DI_Reg(7) = '0' and unsigned(PC) + unsigned(DI_Reg) > 16#FFFF# then
 									PCU <= std_logic_vector(unsigned(PCU) + 1);
 								elsif DI_Reg(7) = '1' and unsigned(PC) < unsigned(not DI_Reg) + 1 then

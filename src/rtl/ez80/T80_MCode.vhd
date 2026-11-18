@@ -1791,7 +1791,7 @@ begin
 					MCycles <= "0011";
 					XYbit_undoc <= '1';
 					case to_integer(unsigned(MCycle)) is
-					when 1 | 7=>
+					when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 						Set_Addr_To <= aXY;
 					when 2 =>
 						ALU_Op <= "1000";
@@ -1816,7 +1816,7 @@ begin
 				-- SLL (HL) (Undocumented) / SWAP (HL)
 				MCycles <= "0011";
 				case to_integer(unsigned(MCycle)) is
-				when 1 | 7 =>
+				when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 					Set_Addr_To <= aXY;
 				when 2 =>
 					ALU_Op <= "1000";
@@ -1847,7 +1847,7 @@ begin
 					MCycles <= "0010";
 					XYbit_undoc <= '1';
 					case to_integer(unsigned(MCycle)) is
-					when 1 | 7=>
+					when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 						Set_Addr_To <= aXY;
 					when 2 =>
 						ALU_Op <= "1001";
@@ -1860,7 +1860,7 @@ begin
 				-- BIT b,(HL)
 				MCycles <= "0010";
 				case to_integer(unsigned(MCycle)) is
-				when 1 | 7 =>
+				when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 					Set_Addr_To <= aXY;
 				when 2 =>
 					ALU_Op <= "1001";
@@ -1887,7 +1887,7 @@ begin
 					MCycles <= "0011";
 					XYbit_undoc <= '1';
 					case to_integer(unsigned(MCycle)) is
-					when 1 | 7=>
+					when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 						Set_Addr_To <= aXY;
 					when 2 =>
 						ALU_Op <= "1010";
@@ -1905,7 +1905,7 @@ begin
 				-- SET b,(HL)
 				MCycles <= "0011";
 				case to_integer(unsigned(MCycle)) is
-				when 1 | 7 =>
+				when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 					Set_Addr_To <= aXY;
 				when 2 =>
 					ALU_Op <= "1010";
@@ -1937,7 +1937,7 @@ begin
 					MCycles <= "0011";
 					XYbit_undoc <= '1';
 					case to_integer(unsigned(MCycle)) is
-					when 1 | 7=>
+					when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 						Set_Addr_To <= aXY;
 					when 2 =>
 						ALU_Op <= "1011";
@@ -1955,7 +1955,7 @@ begin
 				-- RES b,(HL)
 				MCycles <= "0011";
 				case to_integer(unsigned(MCycle)) is
-				when 1 | 7 =>
+				when 1 | 15 =>  -- karabas: XY cycle 6 / 7 = 14 / 15
 					Set_Addr_To <= aXY;
 				when 2 =>
 					ALU_Op <= "1011";
@@ -2551,9 +2551,11 @@ begin
 					-- LD dd,nn: with IL the third byte to the upper byte; with L only, the upper byte = 0
 					if ILm = '1' then
 						MCycles <= "0100";
+						-- .SIL: 3 bytes read, the 16-bit value written (the upper byte 0, CEmu)
+						if MCycle = "0011" and lw = 0 then UOp <= "10"; end if;
 						if MCycle = "0100" then
 							Inc_PC <= '1';
-							Read_To_Reg <= '1';
+							if lw = 1 then Read_To_Reg <= '1'; end if;
 							UOp <= "01";
 							if DPAIR = "11" then
 								Set_BusA_To(3 downto 0) <= "1000";
