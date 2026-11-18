@@ -45,19 +45,26 @@ uint8_t colour_of(fabgl::NativePixelFormat f, void *signals, int i) {
 	}
 }
 
-// one sprite of the list, the way rawDrawSpriteScanline() draws it
-void add_sprite(uint32_t *l, fabgl::Sprite *s) {
+// one sprite of the list, the way rawDrawSpriteScanline() draws it, clipped to the vw x vh picture:
+//   e[0] = its first line | lines << 16       e[1] = its first x | pixels << 16 (RGBA8888: <= 256)
+//   e[2] = the address of its first pixel    e[3] = the bytes of a row | RGBA8888 << 16 | XOR << 17
+void add_sprite(uint32_t *l, fabgl::Sprite *s, int vw, int vh) {
 	if (!s || l[0] >= (uint32_t)MAXSPR) return;
 	auto *f = s->getFrame();
 	if (!f || !f->data || f->width <= 0 || f->height <= 0) return;
 	int fm = f->format == fabgl::PixelFormat::RGBA2222 ? 0 : f->format == fabgl::PixelFormat::RGBA8888 ? 1 : -1;
 	if (fm < 0) return;
 	bool x = fm == 0 && s->paintOptions.mode == fabgl::PaintMode::XOR;
+	int bpp = fm ? 4 : 1, w = f->width, h = f->height;
+	int ox = s->x < 0 ? -s->x : 0, xs = s->x + ox, dw = (s->x + w < vw ? s->x + w : vw) - xs;
+	int oy = s->y < 0 ? -s->y : 0, ys = s->y + oy, dh = (s->y + h < vh ? s->y + h : vh) - ys;
+	if (dw <= 0 || dh <= 0) return;
+	if (fm && dw > 256) dw = 256;      // (the RTL raw[] holds 1088 bytes)
 	uint32_t *e = &l[1 + 4 * l[0]++];
-	e[0] = (uint32_t)(uint16_t)s->x | (uint32_t)(uint16_t)s->y << 16;
-	e[1] = (uint32_t)(uint16_t)f->width | (uint32_t)(uint16_t)f->height << 16;
-	e[2] = (uint32_t)(uintptr_t)f->data;
-	e[3] = (uint32_t)fm | (x ? 2u : 0u);
+	e[0] = (uint32_t)ys | (uint32_t)dh << 16;
+	e[1] = (uint32_t)xs | (uint32_t)dw << 16;
+	e[2] = (uint32_t)(uintptr_t)f->data + (uint32_t)((oy * w + ox) * bpp);
+	e[3] = (uint32_t)(w * bpp & 0xffff) | (uint32_t)fm << 16 | (x ? 1u << 17 : 0u);
 }
 }
 
@@ -95,14 +102,14 @@ void kg_scanout_publish() {
 		if (o.d[0]) {
 			auto *pc = static_cast<fabgl::VGAPalettedController *>(vga);
 			auto *t = pc->textCursor();
-			if (t && t->visible) add_sprite(o.spr, t);
+			if (t && t->visible) add_sprite(o.spr, t, w, h);
 			auto *m = pc->mouseCursor();
 			bool mv = m && m->visible;
 			for (int i = 0; i < pc->spritesCount() && o.spr[0] < (uint32_t)MAXSPR - (mv ? 1 : 0); i++) {
 				auto *sp = pc->getSprite(i);
-				if (sp->hardware && sp->visible && sp->allowDraw) add_sprite(o.spr, sp);
+				if (sp->hardware && sp->visible && sp->allowDraw) add_sprite(o.spr, sp, w, h);
 			}
-			if (mv) add_sprite(o.spr, m);
+			if (mv) add_sprite(o.spr, m, w, h);
 		}
 	}
 	cur ^= 1;

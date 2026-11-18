@@ -15,8 +15,8 @@
  Then the sprites of the line (d[5], read into a table of 32 at the frame start; kg_scanout.cpp:
  the text cursor, hardware sprites, the mouse cursor, as vdp-gl drawSpriteScanLine): for each one
  on the line its pixels (RGBA2222 / RGBA8888, 32-byte bursts into raw[]) over the line buffer where
- alpha is not 0 (RGBA2222 XOR: the colour XORed into it), clipped to the source width; RGBA8888
- rows over 256 pixels are cut there. A new line to make stops the sprites (the rest of them lost
+ alpha is not 0 (RGBA2222 XOR: the colour XORed into it); the firmware clips the entries to the
+ picture (RGBA8888 rows to 256 pixels). A new line to make stops the sprites (the rest of them lost
  on that line: a late line would be worse).
  Memory port: a wishbone master as the VexRiscv buses (CTI 010 = more words of the burst).
  clk_pix side: the counters, the line buffer read (with the doubling), the syncs (high active),
@@ -63,7 +63,7 @@ reg [10:0] sw = 11'd0, sh = 11'd0;     // the source size
 reg xsh = 1'b0, ysh = 1'b0;            // doubling
 reg [9:0] x0 = 10'd0, y0 = 10'd0;      // the top left of the picture on the output
 reg [10:0] vw = 11'd0, vh = 11'd0;     // the visible output size (cropped to 640 x 480)
-reg [31:0] rows_a = 32'd0, rowpal_a = 32'd0, pals_a = 32'd0;
+reg [24:0] rows_a = 25'd0, rowpal_a = 25'd0, pals_a = 25'd0;   // (SDRAM byte addresses: 32 MB)
 
 // ------------------------------------------------------------------ line buffers (clk write, clk_pix read)
 
@@ -118,14 +118,14 @@ reg [3:0] st = S_IDLE;
 reg [2:0] n = 3'd0;                    // words of the current access
 reg [31:0] d0 = 32'd0;
 reg [10:0] line = 11'd0;               // the source line being made
-reg [31:0] row_a = 32'd0;
+reg [24:0] row_a = 25'd0;
 reg [7:0] cur_p = 8'hff;               // the palette in pal[]
 wire [7:0] rp_byte = m_dat >> { line[1:0], 3'b000 };   // the palette of the line (S_RPAL)
 reg [5:0] pal [0:15];
 reg [31:0] raw [0:271];                // the bytes of the line: 34 lines of 32 bytes
 reg [8:0] raw_wa = 9'd0;
 reg [10:0] nbytes = 11'd0;             // the bytes of a line
-reg [31:0] fetch_a = 32'd0, fetch_end = 32'd0;
+reg [24:0] fetch_a = 25'd0, fetch_end = 25'd0;
 reg [10:0] x = 11'd0;                  // the pixel being decoded
 reg [11:0] boff = 12'd0;               // byte offset of the row in raw[] (row_a & 31)
 reg pend = 1'b0;                       // a line to make (pend_line)
@@ -133,7 +133,7 @@ reg [10:0] pend_line = 11'd0;
 reg frame_pend = 1'b0;
 
 // the sprites: the table (4 words each: xy, wh, address, flags), read at the frame start
-reg [31:0] spr_a = 32'd0;
+reg spr_f = 1'b0;                      // S_RAW: the bytes of a sprite (then S_SPW)
 reg [31:0] stbl [0:127];
 reg [6:0] st_wa = 7'd0, st_ra = 7'd0;
 reg [31:0] st_q = 32'd0;
@@ -147,13 +147,13 @@ reg [5:0] ns = 6'd0;                   // sprites in the table
 reg [7:0] sl_n = 8'd0;                 // S_SLIST: words read
 reg [4:0] si = 5'd0;                   // the sprite of the line
 reg [2:0] sk = 3'd0;                   // S_SPR: words of its entry
-reg signed [16:0] s_x = 17'sd0, s_y = 17'sd0;
-reg [15:0] s_w = 16'd0, s_h = 16'd0;
-reg [31:0] s_da = 32'd0;
+// an entry (clipped by kg_scanout.cpp): its first line, lines, first x, pixels, the address of its
+// first pixel, the bytes of its rows
+reg [10:0] s_y = 11'd0, s_h = 11'd0, s_xs = 11'd0, s_dw = 11'd0, s_p = 11'd0, s_oy = 11'd0;
+reg [24:0] s_da = 25'd0;
+reg [15:0] s_st = 16'd0;
 reg [1:0] s_fl = 2'd0;                 // bit 0 RGBA8888, bit 1 XOR
-reg [15:0] s_oy = 16'd0, s_ox = 16'd0; // the first pixel of the sprite on the line
-reg [10:0] s_xs = 11'd0, s_dw = 11'd0, s_p = 11'd0;   // its screen x, the pixels, the pixel
-reg [31:0] s_prod = 32'd0;
+reg [24:0] s_prod = 25'd0;
 reg [31:0] sw0 = 32'd0;                // the raw word of the pixel (S_SPW)
 wire [11:0] s_ba = boff + (s_fl[0] ? { s_p[9:0], 2'b00 } : { 1'b0, s_p });
 wire [7:0] s_b8 = sw0 >> { s_ba[1:0], 3'b000 };
@@ -212,17 +212,17 @@ always @(posedge clk) begin
 		end else if (pend) begin
 			pend <= 1'b0; line <= pend_line;
 			st <= S_ROW;
-			m_cyc <= 1'b1; m_adr <= rows_a[31:2] + { 19'd0, pend_line }; m_cti <= 3'd0;
+			m_cyc <= 1'b1; m_adr <= { 7'd0, rows_a[24:2] + { 12'd0, pend_line } }; m_cti <= 3'd0;
 		end
 	S_DESC:
 		if (m_ack) begin
 			case (n)
 			3'd0: d0 <= m_dat;
 			3'd1: sh <= m_dat[10:0];
-			3'd2: rows_a <= m_dat;
-			3'd3: rowpal_a <= m_dat;
-			3'd4: pals_a <= m_dat;
-			default: spr_a <= m_dat;
+			3'd2: rows_a <= m_dat[24:0];
+			3'd3: rowpal_a <= m_dat[24:0];
+			3'd4: pals_a <= m_dat[24:0];
+			default: ;
 			endcase
 			n <= n + 3'd1;
 			m_adr <= m_adr + 30'd1;
@@ -271,22 +271,22 @@ always @(posedge clk) begin
 	end
 	S_ROW:
 		if (m_ack) begin
-			row_a <= m_dat;
-			m_adr <= rowpal_a[31:2] + { 21'd0, line[10:2] };
+			row_a <= m_dat[24:0];
+			m_adr <= { 7'd0, rowpal_a[24:2] + { 14'd0, line[10:2] } };
 			st <= S_RPAL;
 		end
 	S_RPAL:
 		if (m_ack) begin
 			if (fmt != 4'd6 && rp_byte != cur_p) begin
 				cur_p <= rp_byte;
-				m_adr <= pals_a[31:2] + { 20'd0, rp_byte, 2'b00 };
+				m_adr <= { 7'd0, pals_a[24:2] + { 13'd0, rp_byte, 2'b00 } };
 				n <= 3'd0;
 				st <= S_PAL;
 			end else begin
-				m_adr <= { row_a[31:5], 3'b000 };
+				m_adr <= { 7'd0, row_a[24:5], 3'b000 };
 				m_cti <= 3'b010; n <= 3'd0; raw_wa <= 9'd0;
-				fetch_a <= { row_a[31:5], 5'd0 };
-				fetch_end <= row_a + { 21'd0, nbytes } + 32'd4;
+				fetch_a <= { row_a[24:5], 5'd0 };
+				fetch_end <= row_a + { 14'd0, nbytes } + 25'd4; spr_f <= 1'b0;
 				boff <= { 7'd0, row_a[4:0] };
 				st <= S_RAW;
 			end
@@ -300,10 +300,10 @@ always @(posedge clk) begin
 			n <= n + 3'd1;
 			m_adr <= m_adr + 30'd1;
 			if (n == 3'd3) begin
-				m_adr <= { row_a[31:5], 3'b000 };
+				m_adr <= { 7'd0, row_a[24:5], 3'b000 };
 				m_cti <= 3'b010; n <= 3'd0; raw_wa <= 9'd0;
-				fetch_a <= { row_a[31:5], 5'd0 };
-				fetch_end <= row_a + { 21'd0, nbytes } + 32'd4;
+				fetch_a <= { row_a[24:5], 5'd0 };
+				fetch_end <= row_a + { 14'd0, nbytes } + 25'd4; spr_f <= 1'b0;
 				boff <= { 7'd0, row_a[4:0] };
 				st <= S_RAW;
 			end
@@ -316,10 +316,10 @@ always @(posedge clk) begin
 			m_adr <= m_adr + 30'd1;
 			if (n == 3'd6) m_cti <= 3'b111;                     // the last word of the burst next
 			if (n == 3'd7) begin
-				fetch_a <= fetch_a + 32'd32;
+				fetch_a <= fetch_a + 25'd32;
 				m_cti <= 3'b010;
-				if (fetch_a + 32'd32 >= fetch_end) begin
-					m_cyc <= 1'b0; x <= 11'd0; st <= S_DEC;
+				if (fetch_a + 25'd32 >= fetch_end) begin
+					m_cyc <= 1'b0; x <= 11'd0; s_p <= 11'd0; st <= spr_f ? S_SPW : S_DEC;
 				end
 			end
 		end
@@ -344,58 +344,33 @@ always @(posedge clk) begin
 		sk <= sk + 3'd1;
 		st_ra <= { si, 2'b00 } + { 4'd0, sk } + 7'd1;
 		case (sk)
-		3'd1: begin s_x <= { st_q[15], st_q[15:0] }; s_y <= { st_q[31], st_q[31:16] }; end
-		3'd2: begin s_w <= st_q[15:0]; s_h <= st_q[31:16]; end
-		3'd3: s_da <= st_q;
-		3'd4: begin s_fl <= st_q[1:0]; st <= S_SPH; end
+		3'd1: begin s_y <= st_q[10:0]; s_h <= st_q[26:16]; end
+		3'd2: begin s_xs <= st_q[10:0]; s_dw <= st_q[26:16]; end
+		3'd3: s_da <= st_q[24:0];
+		3'd4: begin s_st <= st_q[15:0]; s_fl <= st_q[17:16]; st <= S_SPH; end
 		default: ;
 		endcase
 	end
 	S_SPH: begin
-		// on this line? (vdp-gl rawDrawSpriteScanline)
-		begin : hit
-			reg signed [17:0] oy, xe;
-			oy = $signed({ 7'd0, line }) - s_y;
-			xe = s_x + $signed({ 1'b0, s_w });
-			if (oy >= 0 && oy < $signed({ 2'b00, s_h }) && s_x < $signed({ 6'd0, sw }) && xe > 0 && s_w != 16'd0) begin
-				s_oy <= oy[15:0];
-				s_ox <= s_x < 0 ? -s_x[15:0] : 16'd0;
-				s_xs <= s_x < 0 ? 11'd0 : s_x[10:0];
-				s_dw <= xe > $signed({ 6'd0, sw }) ? (s_x < 0 ? sw : sw - s_x[10:0]) : s_w[10:0] - (s_x < 0 ? -s_x[10:0] : 11'd0);
-				st <= S_SPM;
-			end else
-				st <= S_SPX;
-		end
+		// on this line?
+		s_oy <= line - s_y;
+		st <= line >= s_y && line - s_y < s_h ? S_SPM : S_SPX;
 	end
 	S_SPM: begin
-		s_prod <= s_oy * s_w + { 16'd0, s_ox };
-		if (s_fl[0] && s_dw > 11'd256) s_dw <= 11'd256;    // raw[] holds 1088 bytes
-		st <= S_SPF; n <= 3'd7;                             // (n 7: start the bursts)
+		s_prod <= s_oy * s_st;
+		st <= S_SPF;
 	end
 	S_SPF:
-		if (n == 3'd7 && !m_cyc) begin
-			// start: the bytes s_da + (s_prod << bpp) .. + (s_dw << bpp)
-			begin : sa
-				reg [31:0] a;
-				a = s_da + (s_fl[0] ? { s_prod[29:0], 2'b00 } : s_prod);
-				m_cyc <= 1'b1; m_adr <= { a[31:5], 3'b000 }; m_cti <= 3'b010; n <= 3'd0; raw_wa <= 9'd0;
-				fetch_a <= { a[31:5], 5'd0 };
-				fetch_end <= a + (s_fl[0] ? { 19'd0, s_dw, 2'b00 } : { 21'd0, s_dw });
-				boff <= { 7'd0, a[4:0] };
-			end
-		end else if (m_ack) begin
-			raw[raw_wa] <= m_dat;
-			raw_wa <= raw_wa + 9'd1;
-			n <= n + 3'd1;
-			m_adr <= m_adr + 30'd1;
-			if (n == 3'd6) m_cti <= 3'b111;
-			if (n == 3'd7) begin
-				fetch_a <= fetch_a + 32'd32;
-				m_cti <= 3'b010;
-				if (fetch_a + 32'd32 >= fetch_end) begin
-					m_cyc <= 1'b0; s_p <= 11'd0; x <= 11'd0; st <= S_SPW;
-				end
-			end
+		// the bytes s_da + s_oy * s_st .. + (s_dw << bpp) into raw[] (S_RAW, then S_SPW)
+		begin : sa
+			reg [24:0] a;
+			a = s_da + s_prod;
+			m_cyc <= 1'b1; m_adr <= { 7'd0, a[24:5], 3'b000 }; m_cti <= 3'b010; n <= 3'd0; raw_wa <= 9'd0;
+			fetch_a <= { a[24:5], 5'd0 };
+			fetch_end <= a + (s_fl[0] ? { 12'd0, s_dw, 2'b00 } : { 14'd0, s_dw });
+			boff <= { 7'd0, a[4:0] };
+			spr_f <= 1'b1;
+			st <= S_RAW;
 		end
 	S_SPW: begin
 		// a pixel in 3 clocks (x: 0 address, 1 the reads, 2 the write)

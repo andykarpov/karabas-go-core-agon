@@ -38,18 +38,17 @@ static bool scan_decode(uint32_t desc, const std::function<uint8_t(uint32_t)> &r
 	if (getenv("SCAN_DBG")) fprintf(stderr, "scan: d5 %08x sprites %u\n", spr, ns);
 	for (uint32_t i = 0; i < ns && i < 32; i++) {
 		uint32_t e = spr + 4 + 16 * i, xy = rd32(e), wh = rd32(e + 4), da = rd32(e + 8), fl = rd32(e + 12);
-		int sx = (int16_t)(xy & 0xffff), sy = (int16_t)(xy >> 16), sw = wh & 0xffff, shh = wh >> 16;
-		if (getenv("SCAN_DBG")) fprintf(stderr, "scan: sprite %u at %d,%d %dx%d flags %x\n", i, sx, sy, sw, shh, fl);
-		for (int y = sy < 0 ? 0 : sy; y < sy + shh && y < h; y++)
-			for (int x = sx < 0 ? 0 : sx; x < sx + sw && x < w; x++) {
-				uint32_t o = (uint32_t)((y - sy) * sw + (x - sx));
+		int ys = xy & 0xffff, dh = xy >> 16, xs = wh & 0xffff, dw = wh >> 16, stride = fl & 0xffff;
+		if (getenv("SCAN_DBG")) fprintf(stderr, "scan: sprite %u lines %d+%d x %d+%d at %08x stride %d flags %x\n", i, ys, dh, xs, dw, da, stride, fl >> 16);
+		for (int y = ys; y < ys + dh && y < h; y++)
+			for (int x = xs; x < xs + dw && x < w; x++) {
 				uint8_t &d = pix[(size_t)y * w + x];
-				if (fl & 1) {
-					uint32_t a = da + 4 * o;
+				if (fl & 0x10000) {
+					uint32_t a = da + (uint32_t)((y - ys) * stride + 4 * (x - xs));
 					if (rd8(a + 3)) d = (rd8(a) >> 6) | (rd8(a + 1) >> 6) << 2 | (rd8(a + 2) >> 6) << 4;
 				} else {
-					uint8_t v = rd8(da + o);
-					if (v & 0xc0) d = (fl & 2) ? (d ^ (v & 0x3f)) : (v & 0x3f);
+					uint8_t v = rd8(da + (uint32_t)((y - ys) * stride + (x - xs)));
+					if (v & 0xc0) d = (fl & 0x20000) ? (d ^ (v & 0x3f)) : (v & 0x3f);
 				}
 			}
 	}
