@@ -7,8 +7,10 @@
 // usage: agon-oracle --mos mos.bin [--sd sd.img] [--ms N (emulated time, default 3000)]
 //          [--keys "text" (typed after --keys-at ms, default 2000; \r = Enter)]
 //          [--vdp-out file] [--trace file [--trace-from N] [--trace-n N]] [--ops file] [--hostfs]
-// trace line (after the instruction at PC): n cycles PC ADL MADL MB AF BC DE HL IX IY SP I IFF1
-use agon_ez80_emulator::{gpio, AgonMachine, AgonMachineConfig, RamInit, SerialLink};
+// trace line (after the instruction at PC): n cycles PC ADL MADL MB AF BC DE HL IX IY SPS SPL I IFF1 IFF2,
+// then its bus events: w:ADDR=VV (memory write), r:PORT=VV / o:PORT=VV (port read / write),
+// int:VV (interrupt taken after it; the entry's writes follow). Without --hostfs only.
+use agon_ez80_emulator::{gpio, AgonMachine, AgonMachineConfig, KgEv, RamInit, SerialLink};
 use ez80::{Reg16, Reg8};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -178,6 +180,7 @@ fn main() {
     let ops_path = arg::<String>(&a, "--ops");
     let mut ops: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut n: u64 = 0;
+    let mut ev: Vec<KgEv> = Vec::new();
     while m.kg_cycles() < end {
         let pc = cpu.state.pc();
         if ops_path.is_some() && !cpu.is_halted() {
@@ -201,18 +204,31 @@ fn main() {
             };
             *ops.entry(k).or_insert(0) += 1;
         }
-        m.kg_step(&mut cpu);
+        if hostfs {
+            m.kg_step(&mut cpu);
+        } else {
+            m.kg_step_logged(&mut cpu, &mut ev);
+        }
         n += 1;
         if let Some(t) = trace.as_mut() {
             if n > trace_from && n - trace_from <= trace_n {
                 let r = &cpu.state.reg;
-                writeln!(
-                    t,
-                    "{} {} {:06x} {} {} {:02x} {:04x} {:06x} {:06x} {:06x} {:06x} {:06x} {:06x} {:02x} {}",
+                let mut line = format!(
+                    "{} {} {:06x} {} {} {:02x} {:04x} {:06x} {:06x} {:06x} {:06x} {:06x} {:02x}{:02x} {:02x}{:02x}{:02x} {:02x} {} {}",
                     n, m.kg_cycles(), pc, r.adl as u8, r.madl as u8, r.mbase, r.get16(Reg16::AF),
                     r.get24(Reg16::BC), r.get24(Reg16::DE), r.get24(Reg16::HL), r.get24(Reg16::IX),
-                    r.get24(Reg16::IY), cpu.state.sp(), r.get8(Reg8::I), r.iff1 as u8
-                )
+                    r.get24(Reg16::IY), r.get8(Reg8::SPSH), r.get8(Reg8::SPSL), r.get8(Reg8::SPLU),
+                    r.get8(Reg8::SPLH), r.get8(Reg8::SPLL), r.get8(Reg8::I), r.iff1 as u8, r.iff2 as u8
+                );
+                for e in &ev {
+                    line += &match e {
+                        KgEv::MemW(a, v) => format!(" w:{:06x}={:02x}", a, v),
+                        KgEv::IoR(p, v) => format!(" r:{:04x}={:02x}", p, v),
+                        KgEv::IoW(p, v) => format!(" o:{:04x}={:02x}", p, v),
+                        KgEv::Int(v) => format!(" int:{:02x}", v),
+                    };
+                }
+                writeln!(t, "{}", line)
                 .unwrap();
             }
         }

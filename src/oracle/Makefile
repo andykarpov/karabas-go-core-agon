@@ -16,7 +16,8 @@ $(CR)/.ready: $(EMU)/agon-ez80-emulator/Cargo.toml $(wildcard $(EMU)/agon-ez80-e
 	cp -r $(EMU)/agon-ez80-emulator $(CR)
 	sed -i -e 's/^version.workspace = true/version = "1.2.6"/' -e 's/^authors.workspace = true/authors = ["Tom Morton"]/' \
 	       -e 's/^edition.workspace = true/edition = "2021"/' -e 's/^license.workspace = true/license = "GPL-3.0"/' $(CR)/Cargo.toml
-	printf '\n// karabas: deterministic stepping for the oracle\n#[path = "../../../kg_trace.rs"]\nmod kg_trace;\n' >> $(CR)/src/agon_machine.rs
+	printf '\n// karabas: deterministic stepping for the oracle\n#[path = "../../../kg_trace.rs"]\npub mod kg_trace;\n' >> $(CR)/src/agon_machine.rs
+	printf '\n// karabas: the bus events of the oracle\npub use agon_machine::kg_trace::KgEv;\n' >> $(CR)/src/lib.rs
 	touch $@
 
 sd: build/sd.img
