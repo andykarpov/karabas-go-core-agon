@@ -312,7 +312,7 @@ always @(posedge clk) begin
 			8'h58: io_dat <= { 31'd0, sim_req };
 			8'h5c: io_dat <= (1 << AUD_LOG2) - aud_n;
 			8'h64: begin io_dat <= { 23'd0, kb_n != 5'd0, kbf[kb_rp] }; kb_pop <= kb_n != 5'd0; end
-			8'h68: begin io_dat <= { ms_new, 1'b0, ms_bt, ms_az, ms_ay, ms_ax }; ms_rd <= 1'b1; end
+			8'h68: begin io_dat <= { ms_new, 2'b00, ms_bt, ms_az, ms_ay, ms_ax }; ms_rd <= 1'b1; end   // (new in bit 31)
 			default: io_dat <= 32'd0;
 			endcase
 		end
