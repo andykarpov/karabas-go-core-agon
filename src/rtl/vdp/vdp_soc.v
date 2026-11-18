@@ -72,6 +72,7 @@ module vdp_soc #(
 	output reg dbg_rx_poll = 1'b0,        // an EZ_RX / EZ_STAT read
 	output wire [31:0] dbg_iadr,          // the instruction fetch address
 	output reg [8:0] dbg_io = 9'd0,       // the last MMIO access { we, offset }
+	output wire [7:0] dbg_bus,            // { own, i_req, i_ack, d_req, v_cyc, sdram_ready }
 	// SDRAM pins (the top makes the tristate)
 	output wire [12:0] sdr_a,
 	output wire [1:0] sdr_ba,
@@ -123,6 +124,7 @@ VexRiscv cpu (
 
 wire d_req = d_cyc & d_stb;
 assign dbg_iadr = { i_adr, 2'b00 };
+assign dbg_bus = { own, i_req, i_ack, d_req, v_cyc, sdram_ready };
 wire i_req = i_cyc & i_stb;
 wire d_io = d_adr[29];                                  // 0x80000000
 wire d_sd = ~d_io & d_adr[29:23] == 7'b0001000;         // 0x10000000..0x11ffffff (address bits 31..25)
