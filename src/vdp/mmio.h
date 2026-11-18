@@ -24,5 +24,6 @@
                                        write: one sample */
 #define MMIO_SCAN    MMIO_REG(0x60) /* write: the address of the frame description (kg_scanout.cpp), taken
                                        by the scanout at the start of its next frame */
+#define MMIO_KBD     MMIO_REG(0x64) /* read: { bit 8 valid, a PS/2 set 2 byte } of the keyboard (pops) */
 /* On the board the eZ80 UART RX FIFO level drives CTS to the eZ80 (MOS waits on it); the ISS is a
    lossless pipe without flow control. */

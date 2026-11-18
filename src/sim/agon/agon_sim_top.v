@@ -87,6 +87,7 @@ module agon_sim_top (
 		.ez_tx_data(v_tx_data), .ez_tx_valid(v_tx_valid), .ez_tx_ready(v_tx_ready),
 		.clk_pix(clk_pix), .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b), .vid_hs(vid_hs), .vid_vs(vid_vs),
 		.vid_de(vid_de), .vblank(v_vblank),
+		.ps2_code(8'd0), .ps2_wr(1'b0),
 		.aud_ce(aud_ce), .aud_out(), .sim_shot_req(sim_shot_req), .sim_req(1'b0),
 		.sim_shot_wr(sim_shot_wr), .sim_shot(sim_shot),
 		.dbg_con_wr(dbg_con_wr), .dbg_con(dbg_con), .dbg_exit(), .dbg_mark_wr(), .dbg_mark(), .cpu_run(dbg_vrun),

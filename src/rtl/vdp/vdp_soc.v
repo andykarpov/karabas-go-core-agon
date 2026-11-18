@@ -18,6 +18,7 @@
    50 W MARK (dbg_mark)                            54 SHOT, 58 SIMREQ: simulation only (sim_* ports)
    5c R AUDIO: free places of the audio FIFO; W: one 8-bit sample (unsigned)
    60 W SCAN: the address of the frame description (src/vdp/kg_scanout.cpp) for vdp_video
+   64 R KBD: { valid, byte } of the PS/2 FIFO (16 bytes; pops)
  Link: ez_rx_* = bytes from the eZ80 (into RX_DEPTH bytes), ez_cts = room above CTS_ROOM; ez_tx_* =
  bytes to the eZ80 (16). Audio: AUD_DEPTH samples, one leaves on each aud_ce (16384 Hz) as aud_out.
  Loader: the SDRAM is written from ld_* (a byte per write) while the CPU is held in reset.
@@ -54,6 +55,9 @@ module vdp_soc #(
 	output wire vid_vs,
 	output wire vid_de,
 	output wire vblank,
+	// the keyboard: PS/2 set 2 bytes (kg_mcu2 PS2_CODE with PS2_KIND 0)
+	input wire [7:0] ps2_code,
+	input wire ps2_wr,
 	// audio
 	input wire aud_ce,
 	output reg [7:0] aud_out = 8'h80,
@@ -197,6 +201,13 @@ assign ez_tx_data = txf[tx_rp];
 assign ez_tx_valid = tx_n != 5'd0;
 wire tx_pop = ez_tx_valid & ez_tx_ready;
 
+// keyboard
+reg [7:0] kbf [0:15];
+reg [3:0] kb_wp = 4'd0, kb_rp = 4'd0;
+reg [4:0] kb_n = 5'd0;
+wire kb_push = ps2_wr & (kb_n != 5'd16);
+reg kb_pop = 1'b0;
+
 // audio
 reg [7:0] audf [0:(1 << AUD_LOG2) - 1];
 reg [AUD_LOG2-1:0] aud_wp = 0, aud_rp = 0;
@@ -220,7 +231,7 @@ reg [7:0] tx_d = 8'd0, aud_d = 8'd0;
 
 always @(posedge clk) begin
 	io_ack <= 1'b0;
-	rx_pop <= 1'b0; tx_push <= 1'b0; aud_push <= 1'b0;
+	rx_pop <= 1'b0; tx_push <= 1'b0; aud_push <= 1'b0; kb_pop <= 1'b0;
 	dbg_con_wr <= 1'b0; dbg_mark_wr <= 1'b0; sim_shot_wr <= 1'b0;
 	dbg_rx_poll <= io_go && !d_we && (io_off == 8'h40 || io_off == 8'h48);
 	if (io_go) dbg_io <= { d_we, io_off };
@@ -271,6 +282,7 @@ always @(posedge clk) begin
 			8'h54: io_dat <= { 31'd0, sim_shot_req };
 			8'h58: io_dat <= { 31'd0, sim_req };
 			8'h5c: io_dat <= (1 << AUD_LOG2) - aud_n;
+			8'h64: begin io_dat <= { 23'd0, kb_n != 5'd0, kbf[kb_rp] }; kb_pop <= kb_n != 5'd0; end
 			default: io_dat <= 32'd0;
 			endcase
 		end
@@ -283,6 +295,9 @@ always @(posedge clk) begin
 	if (tx_push) begin txf[tx_wp] <= tx_d; tx_wp <= tx_wp + 4'd1; end
 	if (tx_pop) tx_rp <= tx_rp + 4'd1;
 	tx_n <= tx_n + (tx_push ? 5'd1 : 5'd0) - (tx_pop ? 5'd1 : 5'd0);
+	if (kb_push) begin kbf[kb_wp] <= ps2_code; kb_wp <= kb_wp + 4'd1; end
+	if (kb_pop) kb_rp <= kb_rp + 4'd1;
+	kb_n <= kb_n + (kb_push ? 5'd1 : 5'd0) - (kb_pop ? 5'd1 : 5'd0);
 	if (aud_push) begin audf[aud_wp] <= aud_d; aud_wp <= aud_wp + 1'b1; end
 	if (aud_pop) begin aud_out <= audf[aud_rp]; aud_rp <= aud_rp + 1'b1; end
 	aud_n <= aud_n + (aud_push ? 1'b1 : 1'b0) - (aud_pop ? 1'b1 : 1'b0);

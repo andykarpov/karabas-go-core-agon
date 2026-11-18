@@ -66,6 +66,30 @@ static void kg_vblank_task(void *) {
 	}
 }
 
+// The keyboard: PS/2 set 2 bytes of the board MCU (MMIO_KBD) into vdp-gl as the emulator does
+// (rust_glue.cpp sendPS2KbEventToFabgl): E0 = an extended key (code | 0xE000), F0 = a release,
+// E1 = Pause (E1 14 77 E1 F0 14 F0 77: VK_PAUSE on the first byte, the rest skipped).
+static void kg_kbd_task(void *) {
+	bool ext = false, rel = false;
+	int skip = 0;
+	for (;;) {
+		uint32_t v = MMIO_KBD;
+		if (!(v & 0x100)) { coop_sleep_us(1000); continue; }
+		uint8_t b = v & 0xff;
+		auto *kb = fabgl::PS2Controller::keyboard();
+		if (skip) { skip--; continue; }
+		if (b == 0xe0) { ext = true; continue; }
+		if (b == 0xf0) { rel = true; continue; }
+		if (b == 0xe1) {
+			skip = 7;
+			if (kb) { fabgl::VirtualKeyItem item = {}; item.down = 1; item.vk = fabgl::VK_PAUSE; kb->injectVirtualKey(item, true); }
+			continue;
+		}
+		if (kb) kb->injectScancode(ext ? (uint16_t)(0xe000 | b) : (uint16_t)b, rel ? 0 : 1);
+		ext = rel = false;
+	}
+}
+
 // Serial2 (the eZ80 UART0) talks to MMIO directly: kg_serial.cpp
 int main() {
 	coop_init();
@@ -73,6 +97,7 @@ int main() {
 	coop_spawn_named(kg_vblank_task, nullptr, 2048, "vblank");
 	coop_spawn_named(kg_sim_task, nullptr, 8192, "sim");
 	coop_spawn_named(kg_audio_task, nullptr, 8192, "audio-out");
+	coop_spawn_named(kg_kbd_task, nullptr, 4096, "kbd");
 	setup();
 	for (;;) loop();
 }
