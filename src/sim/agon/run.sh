@@ -22,7 +22,7 @@ if [ ! -f "$NET" ] || [ -n "$(find $VHD run.sh -newer "$NET" 2>/dev/null)" ]; th
 	sed -E 's/\\([A-Za-z0-9_]+) /\1_esc/g' "$NET.tmp" > "$NET"
 fi
 F=$R/f92
-V="$SIM/agon_sim_top.v $R/agon_ez80.v $R/agon_link.v $F/f92.v $F/f92_mem.v $F/f92_prt.v $F/f92_gpio.v $F/f92_spi.v $F/f92_uart.v $F/f92_intc.v $R/vdp/vdp_soc.v $R/vdp/vdp_video.v $R/vdp/vdp_sdram.v $R/vexriscv/VexRiscv_16k.v"
+V="$SIM/agon_sim_top.v $R/agon_ez80.v $R/agon_link.v $F/f92.v $F/f92_mem.v $F/f92_prt.v $F/f92_gpio.v $F/f92_spi.v $F/f92_uart.v $F/f92_serial.v $F/f92_intc.v $R/vdp/vdp_soc.v $R/vdp/vdp_video.v $R/vdp/vdp_sdram.v $R/vexriscv/VexRiscv_16k.v"
 BIN=$B/obj/Vagon_sim_top
 if [ ! -x "$BIN" ] || [ -n "$(find "$NET" $V tb_agon.cpp ../sys/sdcard.h run.sh -newer "$BIN" 2>/dev/null)" ]; then
 	verilator -O3 -Wno-fatal -Wno-lint -Wno-style -Wno-UNOPTFLAT --no-timing +1364-2005ext+v2005 --top-module agon_sim_top \

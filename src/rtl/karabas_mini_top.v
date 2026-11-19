@@ -120,9 +120,11 @@ assign WD = 16'bz;
 
 assign ESP_RESET_N = 1'bz;
 assign ESP_BOOT_N = 1'bz;
+// the ESP8266 on UART1 of the eZ80 (8N1 at the MOS rate; CTS to the module from the receive buffer)
+wire u1_txd, u1_cts_n;
 assign UART_RX = 1'bz;
-assign UART_TX = 1'bz;
-assign UART_CTS = 1'bz;
+assign UART_TX = u1_txd;
+assign UART_CTS = u1_cts_n;
 
 assign TAPE_OUT = 1'b0;
 assign FT_RESET = 1'b1;
@@ -309,8 +311,9 @@ kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_ez_hold (.clk(clk_ez), .d(areset 
 reg ez_reset_n = 1'b0;
 wire [127:0] ez_regx;
 wire ez_halt_n;
-reg [31:0] dbg_ez = 32'd0;                 // the VDP debug overlay (Ctrl+Alt+D): eZ80 state
-always @(posedge clk_ez) dbg_ez <= { ez_reset_n, ez_halt_n, 6'd0, ez_regx[23:0] };
+// the VDP debug overlay (Ctrl+Alt+D) eZ80 state word: off since Ф2 (LUTs for UART1 / joysticks on the
+// Mini G, user 2026-11-19); the overlay shows 0 there
+wire [31:0] dbg_ez = 32'd0;
 always @(posedge clk_ez) ez_reset_n <= ~(areset_ez | ez_hold);
 
 wire [23:0] maddr;
@@ -321,6 +324,13 @@ wire [7:0] u0_tx_data, u0_rx_data;
 wire u0_tx_valid, u0_tx_ready, u0_rx_valid, u0_rx_full, u0_cts, ez_vblank;
 wire ez_sd_sck, ez_sd_mosi, ez_sd_cs_n;
 
+// joysticks to GPIO C / D as the Console8 (agon_ez80.v): kg_mcu2 bits 1 up, 2 down, 3 left, 4 right,
+// 6 A = fire 1, 7 B = fire 2 (active 1) -> pins active 0; JOY_L = joystick 1, JOY_R = joystick 2
+wire [11:0] joy_ez;
+kg_sync #(.W(12), .STAGES(2), .INIT(12'hfff)) sync_joy (.clk(clk_ez),
+	.d(~{ joy_l[4], joy_r[4], joy_l[3], joy_r[3], joy_l[2], joy_r[2], joy_l[1], joy_r[1],
+	      joy_l[7], joy_r[7], joy_l[6], joy_r[6] }), .q(joy_ez));
+
 agon_ez80 ez (
 	.clk(clk_ez), .reset_n(ez_reset_n), .sys_ce(sys_ce),
 	.maddr(maddr), .mrd(mrd), .mwr(mwr), .mdo(mdo), .mem_di(mem_di),
@@ -328,6 +338,7 @@ agon_ez80 ez (
 	.u0_tx_data(u0_tx_data), .u0_tx_valid(u0_tx_valid), .u0_tx_ready(u0_tx_ready),
 	.u0_rx_data(u0_rx_data), .u0_rx_valid(u0_rx_valid), .u0_rx_full(u0_rx_full), .u0_cts(u0_cts),
 	.sd_sck(ez_sd_sck), .sd_mosi(ez_sd_mosi), .sd_miso(SD_DO), .sd_cs_n(ez_sd_cs_n), .vsync(ez_vblank),
+	.joy_pc(joy_ez[11:4]), .joy_pd(joy_ez[3:0]), .u1_rxd(UART_RX), .u1_txd(u1_txd), .u1_cts_n(u1_cts_n),
 	.insn(), .regx(ez_regx), .regs(), .halt_n(ez_halt_n), .dbg_io_rd(), .dbg_io_wr(), .dbg_io_d()
 );
 assign SD_CS_N = ez_sd_cs_n;
@@ -458,14 +469,10 @@ hdmi_tx #(.SAMPLE_FREQ(48000)) hdmi (
 // ------------------------------------------------------------------ debug (AT+KARABAS=debug:1)
 
 // DEBUG_ADDR: { vdp_run, VDP exited, 6'd0, the last console byte of the VDP };
-// DEBUG_DATA: { ez_reset_n, eZ80 bytes to the VDP (low 7 bits), VDP bytes to the eZ80 }
-reg [6:0] n_ez = 7'd0;
-reg [7:0] n_vdp = 8'd0;
-always @(posedge clk_ez) if (u0_tx_valid & u0_tx_ready) n_ez <= n_ez + 7'd1;
-always @(posedge clk_sys) if (v_tx_valid & v_tx_ready) n_vdp <= n_vdp + 8'd1;
+// DEBUG_DATA: { ez_reset_n, 15'd0 } (the link byte counters are off since Ф2: LUTs)
 reg [7:0] con_last = 8'd0;
 always @(posedge clk_sys) if (vdp_con_wr) con_last <= vdp_con;
 assign dbg_addr = { vdp_run, vdp_exit[8], 6'd0, con_last };
-always @(posedge clk_sys) dbg_data <= { ez_reset_n, n_ez, n_vdp };
+always @(posedge clk_sys) dbg_data <= { ez_reset_n, 15'd0 };
 
 endmodule

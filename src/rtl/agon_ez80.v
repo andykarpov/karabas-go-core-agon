@@ -33,6 +33,15 @@ module agon_ez80 (
 	input             sd_miso,
 	output            sd_cs_n,
 	input             vsync,       // PB1
+	// joysticks as the Console8 (fab-agon-emulator joypad.rs), active 0, idle 1:
+	// PC1/3/5/7 = up / down / left / right of joystick 1, PC0/2/4/6 of joystick 2,
+	// PD5/7 = fire 1 / 2 of joystick 1, PD4/6 of joystick 2
+	input       [7:0] joy_pc,
+	input       [3:0] joy_pd,      // PD7..PD4
+	// UART1 = the ESP8266
+	input             u1_rxd,
+	output            u1_txd,
+	output            u1_cts_n,
 	// debug
 	output            insn,
 	output    [127:0] regx,
@@ -114,6 +123,7 @@ module agon_ez80 (
 		.u0_tx_data(u0_tx_data), .u0_tx_valid(u0_tx_valid), .u0_tx_ready(u0_tx_ready),
 		.u0_rx_data(u0_rx_data), .u0_rx_valid(u0_rx_valid), .u0_rx_full(u0_rx_full), .u0_cts(u0_cts),
 		.sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
-		.pb_in({6'b111111, vsync, 1'b1}), .pc_in(8'hff), .pd_in(8'hff),
+		.pb_in({6'b111111, vsync, 1'b1}), .pc_in(joy_pc), .pd_in({joy_pd, 4'hf}),
+		.u1_rxd(u1_rxd), .u1_txd(u1_txd), .u1_cts_n(u1_cts_n),
 		.pb_out(pb_out), .pc_out(pc_out), .pd_out(pd_out), .pb_oe(pb_oe), .pc_oe(pc_oe), .pd_oe(pd_oe));
 endmodule
