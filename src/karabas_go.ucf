@@ -242,9 +242,6 @@ TIMESPEC "TS_SYS_TO_PIX" = FROM "TG_CLK_SYS" TO "TG_CLK_PIX" 13.3 ns DATAPATHONL
 TIMESPEC "TS_PIX_TO_SYS" = FROM "TG_CLK_PIX" TO "TG_CLK_SYS" 13.3 ns DATAPATHONLY;
 # the select of the BUFGMUX (a clk_sys register): it switches without a glitch at any time of S
 NET "vclk/mux_sel" TIG;
-# the reset of hdmi_tx (sync_areset_pix, held for many pixel clocks while the DCM x5 locks) into the TMDS
-# serialisers on the x5 clock: one serial clock (5 ns at 40 MHz) is not needed for it
-INST "sync_areset_pix/s_1" TNM = "TG_PIX_RST";
 # (no HDMI on Go)
 # MCU_SCK is not related to CLK_50MHZ: kg_mcu crosses with its handshake, the paths are bounded here.
 NET "MCU_SCK" TNM_NET = "TG_CLK_MCU";

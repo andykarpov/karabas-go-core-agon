@@ -297,7 +297,7 @@ def ucf(board):
     if board == "go":
         timing = sub(timing, "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, HDMI; a DCM x5 on it -> clk_hdmi / clk_hdmi_n (200 MHz)\n",
                      "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, the VGA DAC (V_CLK); no HDMI on Go\n", "ucf go hdmi")
-        timing = sub(timing, "INST \"hdmi/chn[*].serial/shift_r*\" TNM = \"TG_TMDS_SER\";\nTIMESPEC \"TS_PIX_RST\" = FROM \"TG_PIX_RST\" TO \"TG_TMDS_SER\" TIG;\n",
+        timing = sub(timing, '# the reset of hdmi_tx (sync_areset_pix, held for many pixel clocks while the DCM x5 locks) into the TMDS\n# serialisers on the x5 clock: one serial clock (5 ns at 40 MHz) is not needed for it\nINST "sync_areset_pix/s_1" TNM = "TG_PIX_RST";\nINST "hdmi/chn[*].serial/shift_r*" TNM = "TG_TMDS_SER";\nTIMESPEC "TS_PIX_RST" = FROM "TG_PIX_RST" TO "TG_TMDS_SER" TIG;\n',
                      "# (no HDMI on Go)\n", "ucf go tmds")
         timing = sub(timing, '# the HDMI transmitter (signaler, island encoder, TMDS encoders, serialisers) in one area next to the TMDS\n# pins (top edge, the serialiser range of core-cpc / core-bbc): at 97 % slices its 65 MHz paths spread over\n# the die and missed by routing (13 of 15 ns route)\nINST "hdmi/*" AREA_GROUP = "AG_HDMI";\nAREA_GROUP "AG_HDMI" RANGE = SLICE_X26Y52:SLICE_X49Y77;\n',
                      "", "ucf go hdmi area")

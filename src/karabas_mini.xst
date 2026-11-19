@@ -6,10 +6,11 @@ run
 -ofmt NGC
 -p xc6slx25-2-ftg256
 -top karabas_mini_top
--opt_mode Speed
+-opt_mode Area
 -opt_level 2
 -power NO
 -iuc NO
+-uc karabas_mini.xcf
 -keep_hierarchy No
 -netlist_hierarchy As_Optimized
 -rtlview Yes
