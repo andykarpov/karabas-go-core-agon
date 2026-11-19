@@ -12,15 +12,16 @@ An [Agon Light](https://www.thebyteattic.com/p/agon.html) / Console8 machine for
 
 The core file is in `src/`. MOS and the VDP firmware are inside it.
 
-Status: checked on Mini G: MOS and the VDP boot, the keyboard, the mouse, `*cat` of the SD card, sound (HDMI, DAC, the level meter of the matrix). The Go and Mini builds have not been run on a board yet.
+Status: checked on Mini G: MOS and the VDP boot, the keyboard, the mouse, `*cat` of the SD card, sound (HDMI, DAC, the level meter of the matrix), the ESP8266 on UART1 (`AT+GMR`), the joysticks. The Go and Mini builds have not been run on a board yet.
 
 ## The machine
 
 - **eZ80:** our own eZ80 core (the T80 extended to 24-bit ADL mode, MBASE, the instruction suffixes), checked instruction by instruction against an emulator on the MOS boot and BBC BASIC. Its timing is that of a Z80 (not the one-clock-per-byte eZ80 pipeline), at 34.09 MHz.
-- **F92 periphery:** UART0 (the VDP link with CTS), UART1, SPI (the SD card), the timers PRT0 / PRT2 (PRT1 / 3 / 4 / 5 are registers only), GPIO with interrupts (vblank on PB1), the on-chip 8 KB RAM, 512 KB external RAM, the 128 KB flash (MOS) in the board SRAM.
+- **F92 periphery:** UART0 (the VDP link with CTS), UART1 (the ESP8266 module of the board: 8N1 at the BRG rate, a 2 KB receive buffer, CTS to the module), SPI (the SD card), the timers PRT0 / PRT2 (PRT1 / 3 / 4 / 5 are registers only), GPIO with interrupts (vblank on PB1), the on-chip 8 KB RAM, 512 KB external RAM, the 128 KB flash (MOS) in the board SRAM.
 - **VDP:** the Console8 VDP firmware 2.16.0 on a VexRiscv (16 KB caches, 75 MHz, SDRAM); vdp-gl draws into its frame buffers, a scanout in the FPGA shows them with the hardware sprites, the text cursor and the mouse cursor on one 640 x 480 at 60 Hz output (smaller modes doubled or centred).
 - **Sound:** the VDP sound generator (8 bit, 16384 Hz).
 - **Keyboard and mouse:** USB through the board MCU, as PS/2 to the VDP.
+- **Joysticks:** two USB / board pads on GPIO C / D as the Console8 (PC1/3/5/7 = up / down / left / right of joystick 1, PC0/2/4/6 of joystick 2, PD5 / PD7 and PD4 / PD6 = fire 1 / 2 = A / B, active low).
 
 ## Getting started
 
@@ -31,7 +32,7 @@ Status: checked on Mini G: MOS and the VDP boot, the keyboard, the mouse, `*cat`
 ## Keys
 
 - **F12:** reset (MOS and the VDP restart).
-- **Ctrl+Alt+D:** a debug overlay (the eZ80 PC, the link counters and its last bytes).
+- **Ctrl+Alt+D:** a debug overlay (the link counters and its last bytes).
 - The mouse is off until a program turns it on (`VDU 23,0,&89,0`; at the MOS prompt `*vdu 23 0 137 0`).
 
 ## Licence
