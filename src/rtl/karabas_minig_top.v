@@ -14,7 +14,7 @@
  The .kg ROMs: MOS at 0 (-> the SRAM flash area), the VDP firmware at 0x1000000 (-> SDRAM 0).
  SD2 = the SD card of MOS, driven by the eZ80 SPI (PB4 = /CS).
  The keyboard: the PS/2 set 2 bytes of kg_mcu2 to the VDP (MMIO KBD, the firmware injects them into
- vdp-gl), the mouse (MS_* -> vdp_soc MOUSE -> vdp-gl). Not yet: the sound out (docs/PLAN.md).
+ vdp-gl), the mouse (MS_* -> vdp_soc MOUSE -> vdp-gl). The sound: VDP samples -> PCM5102 + HDMI audio.
 
  Soft switches (the index of the item in the osd of core.json): 0 Reset.
 */
@@ -190,6 +190,8 @@ wire kbd_wr;
 wire [15:0] joy_l, joy_r;
 wire [7:0] ms_x, ms_y, ms_z, ms_b;
 wire ms_wr;
+wire [23:0] matrix_cmd;
+wire matrix_cmd_wr;
 wire [1:0] ld_kind;
 wire [7:0] ld_slot, ld_data;
 wire [31:0] ld_addr;
@@ -259,7 +261,7 @@ kg_mcu2 #(
 	.FDD_CHNG_REQ(1'b0), .FDD_CHNG_DS(2'd0), .IMG_ACTIVE(),
 	.PORT_OUT_DATA(), .PORT_OUT_WR(), .PORT_OUT_READY(4'b1111), .PORT_IN_DATA(32'd0), .PORT_IN_WR(4'd0),
 	.PORT_CFG(128'd0), .PORT_IN_FULL(), .PORT_STAT(), .PORT_STAT_WR(),
-	.RTC_A(8'd0), .RTC_DI(8'd0), .RTC_CS(1'b0), .RTC_WR_N(1'b1), .MATRIX_CMD(24'd0), .MATRIX_CMD_WR(1'b0),
+	.RTC_A(8'd0), .RTC_DI(8'd0), .RTC_CS(1'b0), .RTC_WR_N(1'b1), .MATRIX_CMD(matrix_cmd), .MATRIX_CMD_WR(matrix_cmd_wr),
 	.DEBUG_ADDR(dbg_addr), .DEBUG_DATA(dbg_data), .RTC_DO(),
 
 	.FT_SPI_ON(ft_spi_on), .FT_VGA_ON(), .FT_RESET(), .FT_SCK(), .FT_MOSI(ft_mosi), .FT_MISO(FT_SPI_MISO),
@@ -402,8 +404,22 @@ kg_l2_osd_overlay osd (
 	.rgb_o(osd_rgb), .hs_o(osd_hs), .vs_o(osd_vs), .de_o(osd_de)
 );
 
-// the sound: silent for now (the PCM5102 and HDMI audio get zeros)
-kg_pcm5102 #(.DIV_BITS(2)) dac (.clk(clk_pix), .reset(areset_pix), .left(16'd0), .right(16'd0),
+// the sound: the VDP samples (8-bit unsigned, 16384 Hz, vdp-gl SoundGenerator) to the PCM5102 and the
+// HDMI audio (mono on both channels). aud_out changes at the aud_ce clock (clk_sys) and holds ~4500
+// clocks: a toggle per sample crosses to clk_pix, the sample is taken when it arrives.
+reg aud_tg = 1'b0;
+always @(posedge clk_sys) if (aud_ce) aud_tg <= ~aud_tg;
+reg [2:0] aud_tg_p = 3'd0;
+reg [15:0] snd = 16'd0;
+always @(posedge clk_pix) begin
+	aud_tg_p <= { aud_tg_p[1:0], aud_tg };
+	if (aud_tg_p[2] ^ aud_tg_p[1]) snd <= { ~aud_out[7], aud_out[6:0], 8'h00 };
+end
+// the level meters of the mcu (dot matrix): the peaks of the samples (clk_sys, as kg_mcu2)
+wire [15:0] snd_sys = { ~aud_out[7], aud_out[6:0], 8'h00 };
+audio_peaks #(.PERIOD_BITS(20)) peaks (.clk(clk_sys), .audio_l(snd_sys), .audio_r(snd_sys),
+	.cmd_wr(matrix_cmd_wr), .cmd(matrix_cmd));
+kg_pcm5102 #(.DIV_BITS(2)) dac (.clk(clk_pix), .reset(areset_pix), .left(snd), .right(snd),
 	.din(DAC_DAT), .bck(DAC_BCK), .lrck(DAC_WS));
 reg [11:0] hacc = 12'd0;
 reg aud_stb = 1'b0;
@@ -426,7 +442,7 @@ end
 hdmi_tx #(.SAMPLE_FREQ(48000)) hdmi (
 	.clk(clk_pix), .sclk(clk_hdmi), .sclk_n(clk_hdmi_n), .reset(areset_pix),
 	.rgb(hdmi_rgb), .vsync(hdmi_vs), .hsync(hdmi_hs), .de(hdmi_de),
-	.audio_en(~dvi_only_p), .audio_l(24'd0), .audio_r(24'd0), .audio_clk(aud_stb),
+	.audio_en(~dvi_only_p), .audio_l({ snd, 8'h00 }), .audio_r({ snd, 8'h00 }), .audio_clk(aud_stb),
 	.tx_clk_n(TMDS_N[3]), .tx_clk_p(TMDS_P[3]), .tx_d_n(TMDS_N[2:0]), .tx_d_p(TMDS_P[2:0])
 );
 

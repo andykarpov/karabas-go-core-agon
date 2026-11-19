@@ -1,7 +1,7 @@
 {
     "id": "agon",
     "name": "Agon",
-    "build": "26111901",
+    "build": "26111902",
     "visible": true,
     "type": "osd",
     "order": 40,
@@ -20,7 +20,7 @@
     "boards": {
         "minig": {
             "link": 2,
-            "build": "26111901",
+            "build": "26111902",
             "bitstream": "karabas_minig.bin"
         }
     },
