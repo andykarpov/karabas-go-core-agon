@@ -13,7 +13,7 @@
 
  Clocks: one PLL, VCO 750 MHz (50 * 15): clk_sys 75 MHz (the VDP, the MCU link, the sound), clk_sdr 75 MHz at
  225 degrees (SDR_CLK through an ODDR2), clk_pix of the video mode (agon_vclk, Ф2: 25 MHz of the PLL for
- 640x480@60 / 640x400@70, DCM_CLKGEN 40 / 65 MHz for 800x600@60 / 1024x768@60; the OSD, HDMI) with
+ 640x480@60 / 640x400@70, DCM_CLKGEN 40 MHz for 800x600@60; the OSD, HDMI) with
  clk_hdmi / clk_hdmi_n x5 from a DCM, clk_ez 34.09 MHz (the eZ80; 37.5 left no timing margin: user 2026-11-19; the F92 system clock 18.432 MHz as a
  clock enable from it); FT_CLK_OUT = clk_ez / 4 (8.5 MHz).
  Memory: the eZ80 in the SRAM (agon_sram: MOS, 512 KB, the on-chip 8 KB), the VDP in the SDRAM.
@@ -184,7 +184,7 @@ kg_pll #(
 wire clk_sys = pll_clk[0];
 wire clk_sdr = pll_clk[1];
 wire clk_ez = pll_clk[5];
-// the pixel clock of the output timing the VDP asks for (Ф2): 25 / 40 / 65 MHz (agon_vclk)
+// the pixel clock of the output timing the VDP asks for (Ф2): 25 / 40 MHz (agon_vclk)
 wire clk_pix, clk_hdmi, clk_hdmi_n, vclk_locked;
 wire [1:0] vid_omode, vid_pmode_sys, vid_pmode;
 agon_vclk #(.HDMI(0)) vclk (.clk_sys(clk_sys), .reset(~pll_locked), .clk_25(pll_clk[2]), .omode(vid_omode),

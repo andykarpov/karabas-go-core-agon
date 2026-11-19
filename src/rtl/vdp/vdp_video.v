@@ -34,7 +34,7 @@ module vdp_video (
 	input wire [31:0] m_dat,
 	output wire vblank_sys,              // the vertical blank (clk side, for FRAME and the eZ80 PB1)
 	output reg [1:0] omode = 2'd0,       // the output the firmware asks for (clk side; d[6]): 0 640x480@60,
-	                                     // 1 640x400@70, 2 800x600@60, 3 1024x768@60 (the pixel clock follows)
+	                                     // 1 640x400@70, 2 800x600@60, 3 1024x768@60 (not asked since 2026-11-19; the pixel clock follows)
 	input wire [1:0] pmode,              // the output clk_pix runs now (from the clock switch, clk_pix side)
 	output reg hneg = 1'b1,              // the sync polarities of pmode (VESA), clk_pix side
 	output reg vneg = 1'b1,
@@ -67,13 +67,17 @@ end
 
 reg [10:0] hc = 11'd0, vc = 11'd0;
 reg row_tg = 1'b0;                     // toggles at the start of each row (hc 0)
+reg [10:0] nvc = 11'd0;                // the next row, set with row_tg (clk reads it at row_start, after the sync)
 always @(posedge clk_pix) begin
 	if (hc >= h_tot - 11'd1) begin
 		hc <= 11'd0;
 		vc <= (vc >= v_tot - 11'd1) ? 11'd0 : vc + 11'd1;
 	end else
 		hc <= hc + 11'd1;
-	if (hc == 11'd0) row_tg <= ~row_tg;
+	if (hc == 11'd0) begin
+		row_tg <= ~row_tg;
+		nvc <= (vc >= v_tot - 11'd1) ? 11'd0 : vc + 11'd1;
+	end
 end
 
 // ------------------------------------------------------------------ geometry (clk, quasi static)
@@ -185,7 +189,7 @@ wire [5:0] s_rgb = s_fl[0] ? { sw0[23:22], sw0[15:14], sw0[7:6] } : s_b8[5:0];
 wire s_stop = pend || frame_pend;      // a new line to make (or the frame): the sprites stop
 
 // the next row: does it start a source line?
-wire [10:0] nvc = (vc >= v_tot - 11'd1) ? 11'd0 : vc + 11'd1;   // (valid at row_start)
+// (nvc: a clk_pix register, the mode table and the compare are not on the crossing; area synthesis -0.8 ns)
 wire [10:0] nry = nvc - y0;
 wire n_in = nvc >= y0 && nry < vh;
 wire n_new = n_in && (!ysh || !nry[0]);

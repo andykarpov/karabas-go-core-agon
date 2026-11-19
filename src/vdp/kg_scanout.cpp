@@ -122,13 +122,13 @@ void add_sprite(uint32_t *l, fabgl::Sprite *s, int vw, int vh) {
 }
 
 // the output timing for a vdp-gl mode and the place of the w x h picture on it (Ф2, user 2026-11-19):
-// 640x480@60 (640x480, 640x240, 320x240), 640x400@70 (320x200@70 / @75), 800x600@60, 1024x768@60
-// (1024x768, 512x384, and 640x512 / 640x256 centred 1:1: 1280x1024 needs 108 MHz)
+// 640x480@60 (640x480, 640x240, 320x240), 640x400@70 (320x200@70 / @75), 800x600@60 (800x600 and all the
+// bigger modes: 1024x768 cropped, 512x384 / 640x512 / 640x256 centred). 1024x768@60 (65 MHz) dropped
+// (user 2026-11-19): with it Mini G (97 % slices) did not route.
 const int OUT_W[4] = { 640, 640, 800, 1024 }, OUT_H[4] = { 480, 400, 600, 768 };
 void geometry(uint32_t *d, const fabgl::VGATimings &t, int fmt, int w, int h) {
 	int lines = t.VVisibleArea * (t.scanCount ? t.scanCount : 1);   // the lines of the real VGA signal
-	int out = t.frequency >= 50000000 || t.HVisibleArea == 512 || lines > 600 ? 3 :
-	          t.HVisibleArea > 640 || lines > 480 ? 2 : lines == 400 ? 1 : 0;
+	int out = t.HVisibleArea > 640 || lines > 480 || t.frequency >= 50000000 ? 2 : lines == 400 ? 1 : 0;
 	int ow = OUT_W[out], oh = OUT_H[out];
 	int xs = ow >= 2 * w ? 1 : 0, ys = oh >= 2 * h ? 1 : 0;
 	int dw = w << xs, dh = h << ys;

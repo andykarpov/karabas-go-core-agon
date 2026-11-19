@@ -1,0 +1,4 @@
+# XST constraints of Mini G (karabas_minig.xst -uc): the core is synthesised for area (-opt_mode Area: 12.1k ->
+# 11.0k LUT, 97 -> 93 % slices; at 97 % PAR stalled in Phase 4), the MCU link for speed (its link -> OSD
+# write path at 75 MHz missed by 0.36 ns for area)
+MODEL "kg_mcu2" opt_mode = speed;

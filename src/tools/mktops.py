@@ -295,8 +295,12 @@ def ucf(board):
     if board == "mini":
         timing = sub(timing, "# The PERIOD of CLK_50MHZ is derived", "# MCU_SCK is not on a clock pin before rev.G.\n# The PERIOD of CLK_50MHZ is derived", "ucf mini")
     if board == "go":
-        timing = sub(timing, "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, HDMI; a DCM x5 on it -> clk_hdmi / clk_hdmi_n (325 MHz\n#   at 65 MHz: within the CLKFX limit of the -2 part, 333 MHz)\n",
+        timing = sub(timing, "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, HDMI; a DCM x5 on it -> clk_hdmi / clk_hdmi_n (200 MHz)\n",
                      "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, the VGA DAC (V_CLK); no HDMI on Go\n", "ucf go hdmi")
+        timing = sub(timing, "INST \"hdmi/chn[*].serial/shift_r*\" TNM = \"TG_TMDS_SER\";\nTIMESPEC \"TS_PIX_RST\" = FROM \"TG_PIX_RST\" TO \"TG_TMDS_SER\" TIG;\n",
+                     "# (no HDMI on Go)\n", "ucf go tmds")
+        timing = sub(timing, '# the HDMI transmitter (signaler, island encoder, TMDS encoders, serialisers) in one area next to the TMDS\n# pins (top edge, the serialiser range of core-cpc / core-bbc): at 97 % slices its 65 MHz paths spread over\n# the die and missed by routing (13 of 15 ns route)\nINST "hdmi/*" AREA_GROUP = "AG_HDMI";\nAREA_GROUP "AG_HDMI" RANGE = SLICE_X26Y52:SLICE_X49Y77;\n',
+                     "", "ucf go hdmi area")
         timing = sub(timing, "agon_sram), FT_CLK_OUT / 4\n", "agon_sram)\n# V_CLK = clk_pix (an ODDR2). MCU_SCK not on a clock pin.\n", "ucf go clk_ez")
     path = os.path.join(SRC, "karabas_%s.ucf" % board)
     pins = open(path).read()

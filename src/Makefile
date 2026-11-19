@@ -37,7 +37,7 @@ rom:
 define board
 SRC_$(1) := $$(call prj_src,karabas_$(1).prj)
 
-karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $$(SRC_$(1)) $(INCLUDES)
+karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $(wildcard karabas_$(1).xcf) $$(SRC_$(1)) $(INCLUDES)
 	mkdir -p xst/projnav.tmp
 	$(XIL) xst -intstyle ise -ifn karabas_$(1).xst -ofn karabas_$(1).syr
 

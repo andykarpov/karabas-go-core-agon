@@ -18,7 +18,8 @@
  - The DCM x5 is reset (pll_reset) at every change of its input clock; locked = it runs.
  pmode is a clk_sys register; the pixel side takes it through a synchroniser (quasi static: it
  changes only with the clock).
- CLKFX_MD_MAX = 13 / 15: the tools time clk_pix at 65 MHz (the fastest mode).
+ CLKFX_MD_MAX = 8 / 15: the tools time clk_pix at 40 MHz. 1024x768@60 (65 MHz) was dropped (user 2026-11-19:
+ Mini G at 97 % slices did not route): omode 3 is taken as 2.
 */
 module agon_vclk #(
 	parameter HDMI = 1
@@ -45,7 +46,7 @@ reg [19:0] tmo = 20'd0;
 wire prog_done, gen_locked;
 
 // M and D of DCM_CLKGEN (CLKFX = 75 MHz x M / D)
-wire [7:0] gm = tgt == 2'd3 ? 8'd13 : 8'd8;
+wire [7:0] gm = 8'd8;                 // 40 MHz only (omode 3, 65 MHz: dropped, taken as 2)
 wire [7:0] gd = 8'd15;
 
 always @(posedge clk_sys) begin
@@ -58,7 +59,7 @@ always @(posedge clk_sys) begin
 	S_IDLE:
 		if (omode != last) begin
 			last <= omode;
-			tgt <= omode;
+			tgt <= omode[1] ? 2'd2 : omode;
 			if (sel) x5_reset <= 1'b1;
 			sel <= 1'b0;
 			if (!omode[1]) pmode <= omode;          // 25 MHz modes
@@ -92,7 +93,7 @@ DCM_CLKGEN #(
 	.SPREAD_SPECTRUM("NONE"),
 	.STARTUP_WAIT("FALSE"),
 	.CLKIN_PERIOD(13.333),
-	.CLKFX_MD_MAX(0.867)
+	.CLKFX_MD_MAX(0.534)
 ) gen (
 	.CLKIN(clk_sys),
 	.CLKFX(clkgen),
@@ -124,7 +125,7 @@ if (HDMI) begin : g_x5
 		.CLKFX_DIVIDE(1),
 		.CLKFX_MULTIPLY(5),
 		.CLKIN_DIVIDE_BY_2("FALSE"),
-		.CLKIN_PERIOD(15.385),
+		.CLKIN_PERIOD(25.0),
 		.CLKOUT_PHASE_SHIFT("NONE"),
 		.CLK_FEEDBACK("1X"),
 		.DESKEW_ADJUST("SYSTEM_SYNCHRONOUS"),

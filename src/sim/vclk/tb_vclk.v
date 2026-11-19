@@ -29,12 +29,12 @@ endtask
 initial begin
 	repeat (10) @(posedge clk); reset = 1'b0;
 	ask(2'd0, 2'd0, 1'b0, 0);
-	ask(2'd3, 2'd3, 1'b1, 13);
+	ask(2'd3, 2'd2, 1'b1, 8);      // 1024x768 (65 MHz) dropped: taken as 800x600
 	ask(2'd2, 2'd2, 1'b1, 8);
 	ask(2'd0, 2'd0, 1'b0, 0);
 	ask(2'd1, 2'd1, 1'b0, 0);
-	ask(2'd3, 2'd3, 1'b1, 13);
-	ask(2'd3, 2'd3, 1'b1, 13);
+	ask(2'd3, 2'd2, 1'b1, 8);      // 1024x768 (65 MHz) dropped: taken as 800x600
+	ask(2'd3, 2'd2, 1'b1, 8);      // 1024x768 (65 MHz) dropped: taken as 800x600
 	ask(2'd0, 2'd0, 1'b0, 0);
 	if (dut.gen.bad_seq != 0) begin errors = errors + 1; $display("FAIL bad programming sequences %0d", dut.gen.bad_seq); end
 	if (dut.gen.programs != 3) begin errors = errors + 1; $display("FAIL programs %0d (want 3)", dut.gen.programs); end

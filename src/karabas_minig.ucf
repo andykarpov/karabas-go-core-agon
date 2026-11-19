@@ -227,12 +227,11 @@ NET "FLASH_HOLD_N"     LOC="P12"    | IOSTANDARD = LVCMOS33; # CONF_IO3
 #   pll_clk<0> 75 MHz (/10) -> clk_sys: the CPU, the SDRAM and SRAM controllers, MMIO, the MCU link
 #   pll_clk<1> 75 MHz (/10, 225 degrees) -> clk_sdr: SDR_CLK only (an ODDR2), as core-archie
 #   pll_clk<2> 25 MHz (/30) -> I0 of the BUFGMUX of agon_vclk: clk_pix of 640x480@60 / 640x400@70
-#   (Ф2) vclk/clkgen: DCM_CLKGEN from clk_sys, 40 / 65 MHz -> I1: clk_pix of 800x600@60 / 1024x768@60;
-#   clk_pix (the BUFGMUX output): vdp_video, the OSD, HDMI; a DCM x5 on it -> clk_hdmi / clk_hdmi_n (325 MHz
-#   at 65 MHz: within the CLKFX limit of the -2 part, 333 MHz)
+#   (Ф2) vclk/clkgen: DCM_CLKGEN from clk_sys, 40 MHz -> I1: clk_pix of 800x600@60 (1024x768@60 dropped);
+#   clk_pix (the BUFGMUX output): vdp_video, the OSD, HDMI; a DCM x5 on it -> clk_hdmi / clk_hdmi_n (200 MHz)
 #   pll_clk<3> / <4>: not used
 #   pll_clk<5> 34.09 MHz (/22) -> clk_ez: the eZ80 machine (agon_ez80, agon_sram), FT_CLK_OUT / 4
-# The PERIOD of CLK_50MHZ is derived onto the PLL outputs. clk_pix is not related to clk_sys in the 40 / 65 MHz
+# The PERIOD of CLK_50MHZ is derived onto the PLL outputs. clk_pix is not related to clk_sys in the 40 MHz
 # modes: the paths between them (the line buffers in BRAM with two clocks, the quasi static geometry and timing
 # of vdp_video taken in the blank, the row toggle, the audio toggle and its sample, dvi_only, pmode through
 # kg_sync) are bounded by TS_SYS_TO_PIX / TS_PIX_TO_SYS instead of the phase analysis.
@@ -242,11 +241,16 @@ TIMESPEC "TS_CLK_50MHZ" = PERIOD "CLK_50MHZ" 20 ns HIGH 50%;
 NET "pll_clk<0>" TNM_NET = "TG_CLK_SYS";
 NET "clk_pix" TNM_NET = "TG_CLK_PIX";      # the output of the BUFGMUX of agon_vclk
 NET "vclk/clkgen" TNM_NET = "TG_CLKGEN";
-TIMESPEC "TS_CLKGEN" = PERIOD "TG_CLKGEN" 65 MHz HIGH 50%;
+TIMESPEC "TS_CLKGEN" = PERIOD "TG_CLKGEN" 40 MHz HIGH 50%;
 TIMESPEC "TS_SYS_TO_PIX" = FROM "TG_CLK_SYS" TO "TG_CLK_PIX" 13.3 ns DATAPATHONLY;
 TIMESPEC "TS_PIX_TO_SYS" = FROM "TG_CLK_PIX" TO "TG_CLK_SYS" 13.3 ns DATAPATHONLY;
 # the select of the BUFGMUX (a clk_sys register): it switches without a glitch at any time of S
 NET "vclk/mux_sel" TIG;
+# the reset of hdmi_tx (sync_areset_pix, held for many pixel clocks while the DCM x5 locks) into the TMDS
+# serialisers on the x5 clock: one serial clock (5 ns at 40 MHz) is not needed for it
+INST "sync_areset_pix/s_1" TNM = "TG_PIX_RST";
+INST "hdmi/chn[*].serial/shift_r*" TNM = "TG_TMDS_SER";
+TIMESPEC "TS_PIX_RST" = FROM "TG_PIX_RST" TO "TG_TMDS_SER" TIG;
 # MCU_SCK is not related to CLK_50MHZ: kg_mcu crosses with its handshake, the paths are bounded here.
 NET "MCU_SCK" TNM_NET = "TG_CLK_MCU";
 TIMESPEC "TS_CLK_MCU" = PERIOD "TG_CLK_MCU" 32 MHz;
@@ -266,3 +270,9 @@ NET "pll_clk<5>" TNM_NET = "TG_CLK_EZ";
 TIMESPEC "TS_EZ_TO_SYS" = FROM "TG_CLK_EZ" TO "TG_CLK_SYS" 13 ns DATAPATHONLY;
 TIMESPEC "TS_SYS_TO_EZ" = FROM "TG_CLK_SYS" TO "TG_CLK_EZ" 13 ns DATAPATHONLY;
 # the loader holds the eZ80 in reset (ld_active through kg_sync) and owns the SRAM pins meanwhile
+
+# the HDMI transmitter (signaler, island encoder, TMDS encoders, serialisers) in one area next to the TMDS
+# pins (top edge, the serialiser range of core-cpc / core-bbc): at 97 % slices its 65 MHz paths spread over
+# the die and missed by routing (13 of 15 ns route)
+INST "hdmi/*" AREA_GROUP = "AG_HDMI";
+AREA_GROUP "AG_HDMI" RANGE = SLICE_X26Y52:SLICE_X49Y77;
