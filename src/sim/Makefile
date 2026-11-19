@@ -1,7 +1,7 @@
 # Ф0 sims: make -> iss (fast ISS for the VDP firmware)
 all: iss
 
-iss: iss.cpp
+iss: iss.cpp scan_decode.h
 	g++ -O2 -march=native -o $@ $<
 
 clean:

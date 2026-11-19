@@ -93,3 +93,9 @@ src/sim/build/
 # Ф0 VDP firmware / ISS builds
 src/vdp/build-*/
 src/sim/iss
+src/oracle/build/
+src/oracle/target/
+src/sim/cpu/build/
+src/sim/cpu/build-ez80/
+src/oracle/cemu/build/
+__pycache__/

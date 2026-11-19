@@ -6,6 +6,7 @@ ENTRY(_start)
 MEMORY { RAM (rwx) : ORIGIN = @ORG@, LENGTH = @LEN@ }
 
 STACK_SIZE = 64K;
+DATA_MAX = 256K;
 
 SECTIONS
 {
@@ -19,20 +20,29 @@ SECTIONS
     } > RAM
     .init_array : { PROVIDE_HIDDEN(__init_array_start = .); KEEP(*(SORT(.init_array.*))) KEEP(*(.init_array)) PROVIDE_HIDDEN(__init_array_end = .); } > RAM
     .fini_array : { PROVIDE_HIDDEN(__fini_array_start = .); KEEP(*(SORT(.fini_array.*))) KEEP(*(.fini_array)) PROVIDE_HIDDEN(__fini_array_end = .); } > RAM
-    .data : ALIGN(8) {
+    /* karabas: the image holds the initial .data at __data_load; crt0 copies it to the run-time .data
+       (below the stack) at every start, so a restart (sw reset, F12) begins with clean data */
+    . = ALIGN(8);
+    __data_load = .;
+    .data (ORIGIN(RAM) + LENGTH(RAM) - STACK_SIZE - DATA_MAX) : AT(__data_load) {
+        __data_start = .;
         *(.data .data.*)
         __global_pointer$ = . + 0x800;
         *(.sdata .sdata.*)
-    } > RAM
-    .bss (NOLOAD) : ALIGN(8) {
+        . = ALIGN(8);
+        __data_end = .;
+    }
+    . = ALIGN(__data_load + SIZEOF(.data), 8);
+    .bss . (NOLOAD) : {
         __bss_start = .;
         *(.sbss .sbss.*)
         *(.bss .bss.*)
         *(COMMON)
         . = ALIGN(8);
         __bss_end = .;
-    } > RAM
+    }
     __heap_start = .;
     __stack_top = ORIGIN(RAM) + LENGTH(RAM);
-    __heap_end = __stack_top - STACK_SIZE;
+    __heap_end = __stack_top - STACK_SIZE - DATA_MAX;
+    ASSERT(SIZEOF(.data) <= DATA_MAX, "DATA_MAX too small for .data")
 }

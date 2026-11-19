@@ -8,6 +8,7 @@
 // usage: iss <fw.bin> [--org A] [--max Minstr] [--ipu N] [--in file] [--in-at us] [--baud N] [--tx file]
 //            [--icache B] [--dcache B] [--prof file: pc + ra every 256 instr]
 //            [--shot us prefix: ask the firmware for a screenshot at that time -> prefix<N>.ppm; repeatable]
+//            [--shot-poll file.ppm: with --stop-poll, a screenshot at that answer, then the exit]
 //            [--stop-poll TAG: at the VDP answer 80 01 TAG print "DONE" with the counters since --in-at,
 //             then ask the firmware to report (stacks) and exit]
 // audio FIFO (MMIO_AUDIO): 512 samples drained at 16384 Hz, underruns counted
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include "scan_decode.h"
 
 static const uint32_t SRAM_SIZE = 4u << 20, SDRAM_BASE = 0x10000000u, SDRAM_SIZE = 32u << 20;
 static std::vector<uint8_t> sram(SRAM_SIZE + 8), sdram(SDRAM_SIZE + 8);
@@ -55,6 +57,12 @@ int main(int argc, char **argv) {
     std::vector<uint64_t> shots;
     const char *shot_prefix = "shot";
     int nshot = 0;
+    const char *shot_poll = nullptr;   // --shot-poll file.ppm: at the --stop-poll answer a screenshot, then exit
+    bool sp_pend = false;
+    uint64_t sp_at = 0;                // env SHOT_DELAY (us): the --shot-poll screenshot that long after the answer
+    std::vector<uint8_t> ps2;          // --ps2 us "hex bytes": PS/2 set 2 bytes on MMIO_KBD from that time
+    uint64_t ps2_at = 0; size_t ps2_pos = 0;
+    uint32_t scan_desc = 0;            // MMIO_SCAN: the frame description of the firmware (scan_decode.h)
     int stop_tag = -1;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--max")) max_instr = strtoull(argv[++i], 0, 10) * 1000000ull;
@@ -68,6 +76,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--prof")) prof = fopen(argv[++i], "w");
         else if (!strcmp(argv[i], "--stop-poll")) stop_tag = strtol(argv[++i], 0, 16);
         else if (!strcmp(argv[i], "--shot")) { shots.push_back(strtoull(argv[++i], 0, 10)); shot_prefix = argv[++i]; }
+        else if (!strcmp(argv[i], "--shot-poll")) shot_poll = argv[++i];
+        else if (!strcmp(argv[i], "--ps2")) { ps2_at = strtoull(argv[++i], 0, 10); for (const char *p = argv[++i]; *p; ) { char *e; long b = strtol(p, &e, 16); if (e == p) break; ps2.push_back((uint8_t)b); p = e; } }
         else if (!strcmp(argv[i], "--in")) {
             FILE *f = fopen(argv[++i], "rb");
             if (!f) { perror(argv[i]); return 2; }
@@ -120,11 +130,12 @@ int main(int argc, char **argv) {
             case 0x18: return (uint32_t)(ninstr / ipu / 16667);   // 60 Hz frames
             case 0x1c: return (uint32_t)(ninstr / ipu / 1000);
             case 0x58: return want_exit ? 1u : 0u;
+            case 0x64: if (ps2_pos < ps2.size() && ninstr / ipu >= ps2_at) return 0x100u | ps2[ps2_pos++]; return 0u;
             case 0x5c: { uint64_t l = aud_level(); return l < AUD_DEPTH ? (uint32_t)(AUD_DEPTH - l) : 0u; }
             case 0x54: {
                 uint32_t k = 0;
                 for (uint64_t t : shots) if (t <= ninstr / ipu) k++;
-                return k > (uint32_t)nshot ? 1u : 0u;
+                return (k > (uint32_t)nshot || (sp_pend && ninstr / ipu >= sp_at)) ? 1u : 0u;
             }
             case 0x40: case 0x48: {
                 // byte k of the input is there from in_at + k * us_per_byte
@@ -147,6 +158,7 @@ int main(int argc, char **argv) {
         if (a & 0x80000000u) {
             uint32_t o = a & 0xff;
             if (o == 0x00) { char c = (char)v; if (c == '\n') { printf("%s\n", line.c_str()); line.clear(); } else line += c; }
+            else if (o == 0x60) scan_desc = v;
             else if (o == 0x5c) { aud_level(); aud_wr++; if ((v & 0xff) != 0x80 && (v & 0xff) != 0x7f) aud_nonsilent++; }
             else if (o == 0x44) {
                 uint8_t b = v & 0xff;
@@ -160,14 +172,15 @@ int main(int argc, char **argv) {
                            (unsigned long long)(tot.dm[0] - z.dm[0]), (unsigned long long)(tot.dm[1] - z.dm[1]),
                            (unsigned long long)(tot.st[0] - z.st[0]), (unsigned long long)(tot.st[1] - z.st[1]),
                            (unsigned long long)aud_under);
-                    want_exit = true;
+                    if (shot_poll) { sp_pend = true; sp_at = ninstr / ipu + (getenv("SHOT_DELAY") ? strtoull(getenv("SHOT_DELAY"), 0, 10) : 0); } else want_exit = true;
                 }
                 tx_state = (b == 0x80) ? 1 : (tx_state == 1 && b == 0x01) ? 2 : 0;
             }
             else if (o == 0x54) {
                 uint32_t w = v >> 16, h = v & 0xffff;
                 char name[512];
-                snprintf(name, sizeof name, "%s%d.ppm", shot_prefix, nshot++);
+                if (sp_pend) snprintf(name, sizeof name, "%s", shot_poll);
+                else snprintf(name, sizeof name, "%s%d.ppm", shot_prefix, nshot++);
                 if (w && h && w * h * 3 <= (8u << 20)) {
                     FILE *pf = fopen(name, "wb");
                     fprintf(pf, "P6\n%u %u\n255\n", w, h);
@@ -175,6 +188,16 @@ int main(int argc, char **argv) {
                     fclose(pf);
                 }
                 printf("SHOT %s %ux%u at %llu us\n", name, w, h, (unsigned long long)(ninstr / ipu));
+                if (scan_desc && w && h) {
+                    // the frame as the scanout reads it (the description of the last vblank)
+                    std::vector<uint8_t> rgb; int sw = 0, sh = 0;
+                    bool ok = scan_decode(scan_desc, [&](uint32_t a) { int r; uint8_t *q = host(a, r); return q ? *q : (uint8_t)0; }, rgb, sw, sh);
+                    std::string sn = std::string(name) + ".scan.ppm";
+                    if (ok) { FILE *pf = fopen(sn.c_str(), "wb"); fprintf(pf, "P6\n%d %d\n255\n", sw, sh); fwrite(rgb.data(), 1, rgb.size(), pf); fclose(pf); }
+                    bool same = ok && (uint32_t)sw == w && (uint32_t)sh == h && !memcmp(rgb.data(), &sdram[0x01800000], rgb.size());
+                    printf("SCAN %s %dx%d: %s the screenshot\n", sn.c_str(), sw, sh, same ? "EQUAL to" : "DIFFERS from");
+                }
+                if (sp_pend) { sp_pend = false; want_exit = true; }
             }
             else if (o == 0x50) {
                 tot.instr = ninstr;

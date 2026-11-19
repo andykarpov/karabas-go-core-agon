@@ -1,0 +1,17 @@
+[package]
+name = "agon-oracle"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+agon-ez80-emulator = { path = "build/agon-ez80-emulator" }
+ez80 = { git = "https://github.com/tomm/ez80.git", rev = "13c151e89f520b3bae3343bea9d67d06e8037cfa" }
+
+[profile.release]
+debug = 1
+
+# karabas: our fixed copy of the ez80 crate (src/oracle/Makefile)
+[patch."https://github.com/tomm/ez80.git"]
+ez80 = { path = "build/ez80" }

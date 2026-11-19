@@ -1,0 +1,43 @@
+// karabas: Ф1.3 system testbench top: agon_ez80 (src/rtl: the eZ80 core, its bus, the F92
+// periphery). The memories, the SD card and the VDP are C++ (sys_tb.cpp).
+module sys_top (
+	input             clk,
+	input             reset_n,
+	input             sys_ce,
+	output     [23:0] maddr,
+	output            mrd,
+	output            mwr,
+	output      [7:0] mdo,
+	input       [7:0] mem_di,
+	output            sel_ram,
+	output            sel_flash,
+	output     [16:0] flash_ofs,
+	output            sel_ext,
+	output      [7:0] u0_tx_data,
+	output            u0_tx_valid,
+	input             u0_tx_ready,
+	input       [7:0] u0_rx_data,
+	input             u0_rx_valid,
+	output            u0_rx_full,
+	input             u0_cts,
+	output            sd_sck,
+	output            sd_mosi,
+	input             sd_miso,
+	output            sd_cs_n,
+	input             vsync,
+	output            insn,
+	output    [127:0] regx,
+	output    [211:0] regs,
+	output            halt_n,
+	output            dbg_io_rd,
+	output            dbg_io_wr,
+	output      [7:0] dbg_io_d
+);
+	agon_ez80 u (.clk(clk), .reset_n(reset_n), .sys_ce(sys_ce), .maddr(maddr), .mrd(mrd), .mwr(mwr),
+		.mdo(mdo), .mem_di(mem_di), .sel_ram(sel_ram), .sel_flash(sel_flash), .flash_ofs(flash_ofs),
+		.sel_ext(sel_ext), .u0_tx_data(u0_tx_data), .u0_tx_valid(u0_tx_valid), .u0_tx_ready(u0_tx_ready),
+		.u0_rx_data(u0_rx_data), .u0_rx_valid(u0_rx_valid), .u0_rx_full(u0_rx_full), .u0_cts(u0_cts),
+		.sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n), .vsync(vsync),
+		.insn(insn), .regx(regx), .regs(regs), .halt_n(halt_n),
+		.dbg_io_rd(dbg_io_rd), .dbg_io_wr(dbg_io_wr), .dbg_io_d(dbg_io_d));
+endmodule

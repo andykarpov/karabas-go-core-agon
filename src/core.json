@@ -1,0 +1,35 @@
+{
+    "id": "agon",
+    "name": "Agon",
+    "build": "26111902",
+    "visible": true,
+    "type": "osd",
+    "order": 40,
+    "eeprom_bank": 255,
+    "rtc_mode": 0,
+    "roms": [
+        {
+            "filename": "roms/mos.bin",
+            "address": 0
+        },
+        {
+            "filename": "roms/vdp.bin",
+            "address": 16777216
+        }
+    ],
+    "boards": {
+        "minig": {
+            "link": 2,
+            "build": "26111902",
+            "bitstream": "karabas_minig.bin"
+        }
+    },
+    "osd": [
+        {
+            "type": "T",
+            "name": "Reset",
+            "hotkey": "F12",
+            "index": 0
+        }
+    ]
+}

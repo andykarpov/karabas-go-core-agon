@@ -22,5 +22,11 @@
 #define MMIO_SIMREQ  MMIO_REG(0x58) /* sim only. read: bit 0 = the sim wants the firmware to report and exit */
 #define MMIO_AUDIO   MMIO_REG(0x5c) /* read: free places in the audio FIFO (8-bit unsigned samples, 16384 Hz);
                                        write: one sample */
+#define MMIO_SCAN    MMIO_REG(0x60) /* write: the address of the frame description (kg_scanout.cpp), taken
+                                       by the scanout at the start of its next frame */
+#define MMIO_KBD     MMIO_REG(0x64) /* read: { bit 8 valid, a PS/2 set 2 byte } of the keyboard (pops) */
+#define MMIO_MOUSE   MMIO_REG(0x68) /* read: { 31 new, 28..26 buttons, 25..18 dz (+ up), 17..9 dy (+ down), 8..0 dx }
+                                       summed since the last read (signed, saturated; the read clears) */
+#define MMIO_DBG_EZ  MMIO_REG(0x6c) /* read (board debug): { 31 eZ80 reset_n, 30 halt_n, 23..0 PC } */
 /* On the board the eZ80 UART RX FIFO level drives CTS to the eZ80 (MOS waits on it); the ISS is a
    lossless pipe without flow control. */
