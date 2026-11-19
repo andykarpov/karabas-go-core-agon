@@ -18,6 +18,16 @@
         }
     ],
     "boards": {
+        "go": {
+            "link": 2,
+            "build": "26111902",
+            "bitstream": "karabas_go.bin"
+        },
+        "mini": {
+            "link": 2,
+            "build": "26111902",
+            "bitstream": "karabas_mini.bin"
+        },
         "minig": {
             "link": 2,
             "build": "26111902",
