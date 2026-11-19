@@ -23,7 +23,7 @@ if [ ! -f "$NET" ] || [ -n "$(find $VHD run.sh -newer "$NET" 2>/dev/null)" ]; th
 	ghdl --synth $G --out=verilog -gEZ80=1 -gIOWait=1 -gMode=0 T80 > "$NET.tmp" 2> "$B/ghdl.log" || { tail -20 "$B/ghdl.log"; exit 1; }
 	sed -E 's/\\([A-Za-z0-9_]+) /\1_esc/g' "$NET.tmp" > "$NET"
 fi
-V="$SIM/sys_top.v $(cd ../../rtl && pwd)/agon_ez80.v $F92/f92.v $F92/f92_mem.v $F92/f92_prt.v $F92/f92_gpio.v $F92/f92_spi.v $F92/f92_uart.v $F92/f92_intc.v"
+V="$SIM/sys_top.v $(cd ../../rtl && pwd)/agon_ez80.v $F92/f92.v $F92/f92_mem.v $F92/f92_prt.v $F92/f92_gpio.v $F92/f92_spi.v $F92/f92_uart.v $F92/f92_serial.v $F92/f92_intc.v"
 BIN=$B/obj/Vsys_top
 if [ ! -x "$BIN" ] || [ -n "$(find "$NET" $V sys_tb.cpp sdcard.h run.sh -newer "$BIN" 2>/dev/null)" ]; then
 	verilator -O3 -Wno-fatal -Wno-lint -Wno-style -Wno-UNOPTFLAT --no-timing +1364-2005ext+v --top-module sys_top \

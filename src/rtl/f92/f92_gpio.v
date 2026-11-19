@@ -19,13 +19,15 @@ module f92_gpio (
 	input       [7:0] pin_in,      // the input levels of the pins
 	output      [7:0] pin_out,     // the output levels (DR in the output modes)
 	output      [7:0] pin_oe,      // 1 = the pin drives (output modes; open drain only for 0)
-	output reg  [7:0] irq
+	output reg  [7:0] irq,
+	output      [7:0] pin_alt      // 1 = the alternate function (modes 10 / 11)
 );
 	reg [7:0] dr, ddr, alt1, alt2, lvl_q;
 
 	wire [7:0] outm = ~ddr & ~alt1 & ~alt2 | ~ddr & alt1 & ~alt2 | ddr & alt1 & ~alt2;  // modes 0-7 but 2/3
 	wire [7:0] lvl  = (outm & dr) | (~outm & pin_in);
 	assign pin_out = dr;
+	assign pin_alt = alt2 & ~alt1 & ddr;
 	assign pin_oe  = (~ddr & ~alt1 & ~alt2) |                 // push-pull
 	                 (~ddr & alt1 & ~alt2 & ~dr) |            // open drain: drives 0
 	                 (ddr & alt1 & ~alt2 & dr);               // open source: drives 1

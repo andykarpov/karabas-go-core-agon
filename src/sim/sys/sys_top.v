@@ -37,7 +37,8 @@ module sys_top (
 		.mdo(mdo), .mem_di(mem_di), .sel_ram(sel_ram), .sel_flash(sel_flash), .flash_ofs(flash_ofs),
 		.sel_ext(sel_ext), .u0_tx_data(u0_tx_data), .u0_tx_valid(u0_tx_valid), .u0_tx_ready(u0_tx_ready),
 		.u0_rx_data(u0_rx_data), .u0_rx_valid(u0_rx_valid), .u0_rx_full(u0_rx_full), .u0_cts(u0_cts),
-		.sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n), .vsync(vsync),
+		.sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
+		.joy_pc(8'hff), .joy_pd(4'hf), .u1_rxd(1'b1), .u1_txd(), .u1_cts_n(), .vsync(vsync),
 		.insn(insn), .regx(regx), .regs(regs), .halt_n(halt_n),
 		.dbg_io_rd(dbg_io_rd), .dbg_io_wr(dbg_io_wr), .dbg_io_d(dbg_io_d));
 endmodule
