@@ -4,11 +4,11 @@
 set -e
 cd "$(dirname "$0")"
 FW=$(cd ../../vdp && pwd)/build-rv32imO2/vdp.bin
-NAMES=${*:-"gtext0 gtext1 gtext2 gtext8 hwspr8"}
+NAMES=${*:-"gtext0 gtext1 gtext2 gtext8 hwspr8 mg2 mg12 mg16 mg18 mg19 mg20 mg24 mg27"}
 mkdir -p out
 ./run.sh "$FW" --max 1 >/dev/null 2>&1 || true      # build once
 for n in $NAMES; do
-	../mkstream.py "$n" "out/$n.bin"
+	../mkstream.py "$n" "out/$n.bin" --nocursor --settle
 	( ./run.sh "$FW" --in "out/$n.bin" --ppm "out/$n.ppm" > "out/$n.log" 2>&1 || true
 	  echo "JOB-STAGE: $n"; grep -h "^VIDEO\|^DONE" "out/$n.log" | sed "s|^|$n: |" || echo "$n: no VIDEO line" ) &
 done

@@ -33,6 +33,11 @@ module vdp_video (
 	input wire m_ack,
 	input wire [31:0] m_dat,
 	output wire vblank_sys,              // the vertical blank (clk side, for FRAME and the eZ80 PB1)
+	output reg [1:0] omode = 2'd0,       // the output the firmware asks for (clk side; d[6]): 0 640x480@60,
+	                                     // 1 640x400@70, 2 800x600@60, 3 1024x768@60 (the pixel clock follows)
+	input wire [1:0] pmode,              // the output clk_pix runs now (from the clock switch, clk_pix side)
+	output reg hneg = 1'b1,              // the sync polarities of pmode (VESA), clk_pix side
+	output reg vneg = 1'b1,
 	// the picture
 	input wire clk_pix,
 	output reg [1:0] r = 2'd0,
@@ -45,15 +50,30 @@ module vdp_video (
 
 // ------------------------------------------------------------------ clk_pix: counters
 
-reg [9:0] hc = 10'd0, vc = 10'd0;
+// the timing of each output (VESA / VGA): visible, sync start, sync end, total; polarity
+reg [10:0] h_act, h_ss, h_se, h_tot, v_act, v_ss, v_se, v_tot;
+always @(posedge clk_pix) begin
+	case (pmode)
+	2'd0: begin h_act <= 11'd640;  h_ss <= 11'd656;  h_se <= 11'd752;  h_tot <= 11'd800;
+	            v_act <= 11'd480;  v_ss <= 11'd490;  v_se <= 11'd492;  v_tot <= 11'd525; hneg <= 1'b1; vneg <= 1'b1; end
+	2'd1: begin h_act <= 11'd640;  h_ss <= 11'd656;  h_se <= 11'd752;  h_tot <= 11'd800;
+	            v_act <= 11'd400;  v_ss <= 11'd412;  v_se <= 11'd414;  v_tot <= 11'd449; hneg <= 1'b1; vneg <= 1'b0; end
+	2'd2: begin h_act <= 11'd800;  h_ss <= 11'd840;  h_se <= 11'd968;  h_tot <= 11'd1056;
+	            v_act <= 11'd600;  v_ss <= 11'd601;  v_se <= 11'd605;  v_tot <= 11'd628; hneg <= 1'b0; vneg <= 1'b0; end
+	default: begin h_act <= 11'd1024; h_ss <= 11'd1048; h_se <= 11'd1184; h_tot <= 11'd1344;
+	            v_act <= 11'd768;  v_ss <= 11'd771;  v_se <= 11'd777;  v_tot <= 11'd806; hneg <= 1'b1; vneg <= 1'b1; end
+	endcase
+end
+
+reg [10:0] hc = 11'd0, vc = 11'd0;
 reg row_tg = 1'b0;                     // toggles at the start of each row (hc 0)
 always @(posedge clk_pix) begin
-	if (hc == 10'd799) begin
-		hc <= 10'd0;
-		vc <= (vc == 10'd524) ? 10'd0 : vc + 10'd1;
+	if (hc >= h_tot - 11'd1) begin
+		hc <= 11'd0;
+		vc <= (vc >= v_tot - 11'd1) ? 11'd0 : vc + 11'd1;
 	end else
-		hc <= hc + 10'd1;
-	if (hc == 10'd0) row_tg <= ~row_tg;
+		hc <= hc + 11'd1;
+	if (hc == 11'd0) row_tg <= ~row_tg;
 end
 
 // ------------------------------------------------------------------ geometry (clk, quasi static)
@@ -61,8 +81,9 @@ end
 reg [3:0] fmt = 4'd0;                  // 0 none, 1 2 colours, 2 4, 3 8, 4 16, 6 direct RGB222
 reg [10:0] sw = 11'd0, sh = 11'd0;     // the source size
 reg xsh = 1'b0, ysh = 1'b0;            // doubling
-reg [9:0] x0 = 10'd0, y0 = 10'd0;      // the top left of the picture on the output
-reg [10:0] vw = 11'd0, vh = 11'd0;     // the visible output size (cropped to 640 x 480)
+reg [10:0] x0 = 11'd0, y0 = 11'd0;     // the top left of the picture on the output (d[7])
+reg [10:0] vw = 11'd0, vh = 11'd0;     // the visible output size (d[8])
+reg [10:0] vact_c = 11'd480;           // the visible lines of pmode for the clk side (quasi static)
 reg [24:0] rows_a = 25'd0, rowpal_a = 25'd0, pals_a = 25'd0;   // (SDRAM byte addresses: 32 MB)
 
 // ------------------------------------------------------------------ line buffers (clk write, clk_pix read)
@@ -78,8 +99,8 @@ end
 
 // ------------------------------------------------------------------ clk_pix: the picture
 
-wire [10:0] ry = { 1'b0, vc } - { 1'b0, y0 };
-wire [10:0] rx = { 1'b0, hc } - { 1'b0, x0 };
+wire [10:0] ry = vc - y0;
+wire [10:0] rx = hc - x0;
 wire in_y = vc >= y0 && ry < vh;
 wire in_x = hc >= x0 && rx < vw;
 wire [10:0] sy = ysh ? { 1'b0, ry[10:1] } : ry;
@@ -88,10 +109,10 @@ reg [5:0] px = 6'd0;
 reg act1 = 1'b0, pic1 = 1'b0, hs1 = 1'b0, vs1 = 1'b0;
 always @(posedge clk_pix) begin
 	px <= lb[{ sy[0], sx[9:0] }];
-	act1 <= hc < 10'd640 && vc < 10'd480;
+	act1 <= hc < h_act && vc < v_act;
 	pic1 <= in_x && in_y && fmt != 4'd0;
-	hs1 <= hc >= 10'd656 && hc < 10'd752;
-	vs1 <= vc >= 10'd490 && vc < 10'd492;
+	hs1 <= hc >= h_ss && hc < h_se;
+	vs1 <= vc >= v_ss && vc < v_se;
 	de <= act1;
 	hs <= hs1;
 	vs <= vs1;
@@ -105,9 +126,9 @@ always @(posedge clk) row_s <= { row_s[1:0], row_tg };
 wire row_start = row_s[2] ^ row_s[1];
 // vc is the new row already when the row start arrives here (it changed a clk_pix before the toggle)
 // and stays for the whole row: read directly at row_start, then held in vc_s
-reg [9:0] vc_s = 10'd0;
-always @(posedge clk) if (row_start) vc_s <= vc;
-assign vblank_sys = vc_s >= 10'd480;
+reg [10:0] vc_s = 11'd0;
+always @(posedge clk) if (row_start) begin vc_s <= vc; vact_c <= v_act; end
+assign vblank_sys = vc_s >= vact_c;
 
 // ------------------------------------------------------------------ clk: the fetch engine
 
@@ -115,7 +136,8 @@ localparam [3:0] S_IDLE = 4'd0, S_DESC = 4'd1, S_GEOM = 4'd2, S_ROW = 4'd3, S_RP
 	S_RAW = 4'd6, S_DEC = 4'd7, S_DEC2 = 4'd8, S_SLIST = 4'd9, S_SPR = 4'd10, S_SPH = 4'd11,
 	S_SPM = 4'd12, S_SPF = 4'd13, S_SPX = 4'd14, S_SPW = 4'd15;
 reg [3:0] st = S_IDLE;
-reg [2:0] n = 3'd0;                    // words of the current access
+reg [3:0] n = 4'd0;                    // words of the current access
+reg [31:0] d5 = 32'd0, d6 = 32'd0;     // the sprite list, the output / doubling / bytes of a line
 reg [31:0] d0 = 32'd0;
 reg [10:0] line = 11'd0;               // the source line being made
 reg [24:0] row_a = 25'd0;
@@ -163,9 +185,9 @@ wire [5:0] s_rgb = s_fl[0] ? { sw0[23:22], sw0[15:14], sw0[7:6] } : s_b8[5:0];
 wire s_stop = pend || frame_pend;      // a new line to make (or the frame): the sprites stop
 
 // the next row: does it start a source line?
-wire [10:0] nvc = (vc == 10'd524) ? 11'd0 : { 1'b0, vc } + 11'd1;   // (valid at row_start)
-wire [10:0] nry = nvc - { 1'b0, y0 };
-wire n_in = nvc >= { 1'b0, y0 } && nry < vh;
+wire [10:0] nvc = (vc >= v_tot - 11'd1) ? 11'd0 : vc + 11'd1;   // (valid at row_start)
+wire [10:0] nry = nvc - y0;
+wire n_in = nvc >= y0 && nry < vh;
 wire n_new = n_in && (!ysh || !nry[0]);
 wire [10:0] n_line = ysh ? { 1'b0, nry[10:1] } : nry;
 
@@ -205,7 +227,7 @@ always @(posedge clk) begin
 	lb_we <= 1'b0;
 	st_we <= 1'b0;
 	if (row_start) begin
-		if (vc == 10'd480 && scan_adr != 32'd0) frame_pend <= 1'b1;     // row 480 starts: the description
+		if (vc == v_act && scan_adr != 32'd0) frame_pend <= 1'b1;     // the first blank row: the description
 		if (n_new && fmt != 4'd0) begin pend <= 1'b1; pend_line <= n_line; end
 	end
 	if (reset) begin
@@ -214,7 +236,7 @@ always @(posedge clk) begin
 	S_IDLE:
 		if (frame_pend) begin
 			frame_pend <= 1'b0; pend <= 1'b0;
-			st <= S_DESC; n <= 3'd0;
+			st <= S_DESC; n <= 4'd0;
 			m_cyc <= 1'b1; m_adr <= scan_adr[31:2]; m_cti <= 3'd0;
 		end else if (pend) begin
 			pend <= 1'b0; line <= pend_line;
@@ -224,20 +246,24 @@ always @(posedge clk) begin
 	S_DESC:
 		if (m_ack) begin
 			case (n)
-			3'd0: d0 <= m_dat;
-			3'd1: sh <= m_dat[10:0];
-			3'd2: rows_a <= m_dat[24:0];
-			3'd3: rowpal_a <= m_dat[24:0];
-			3'd4: pals_a <= m_dat[24:0];
+			4'd0: d0 <= m_dat;
+			4'd1: sh <= m_dat[10:0];
+			4'd2: rows_a <= m_dat[24:0];
+			4'd3: rowpal_a <= m_dat[24:0];
+			4'd4: pals_a <= m_dat[24:0];
+			4'd5: d5 <= m_dat;
+			4'd6: d6 <= m_dat;
+			4'd7: begin x0 <= m_dat[10:0]; y0 <= m_dat[26:16]; end
 			default: ;
 			endcase
-			n <= n + 3'd1;
+			n <= n + 4'd1;
 			m_adr <= m_adr + 30'd1;
-			if (n == 3'd5) begin
+			if (n == 4'd8) begin
+				vw <= m_dat[10:0]; vh <= m_dat[26:16];
 				// the sprite list: its count, then the table
 				ns <= 6'd0; sl_n <= 8'd0;
-				if (m_dat == 32'd0) begin m_cyc <= 1'b0; st <= S_GEOM; end
-				else begin m_adr <= m_dat[31:2]; st <= S_SLIST; end
+				if (d5 == 32'd0) begin m_cyc <= 1'b0; st <= S_GEOM; end
+				else begin m_adr <= d5[31:2]; st <= S_SLIST; end
 			end
 		end
 	S_SLIST:
@@ -255,24 +281,11 @@ always @(posedge clk) begin
 	S_GEOM: begin
 		fmt <= (d0[3:0] >= 4'd1 && d0[3:0] <= 4'd4) || d0[3:0] == 4'd6 ? d0[3:0] : 4'd0;
 		sw <= d0[26:16];
-		xsh <= d0[26:16] <= 11'd320;
-		ysh <= sh <= 11'd240;
-		begin : geo
-			reg [11:0] dw, dh;
-			dw = d0[26:16] <= 11'd320 ? { d0[26:16], 1'b0 } : { 1'b0, d0[26:16] };
-			dh = sh <= 11'd240 ? { sh, 1'b0 } : { 1'b0, sh };
-			vw <= dw > 12'd640 ? 11'd640 : dw[10:0];
-			vh <= dh > 12'd480 ? 11'd480 : dh[10:0];
-			x0 <= dw >= 12'd640 ? 10'd0 : (12'd640 - dw) >> 1;
-			y0 <= dh >= 12'd480 ? 10'd0 : (12'd480 - dh) >> 1;
-		end
-		case (d0[3:0])
-		4'd1: nbytes <= (d0[26:16] + 11'd7) >> 3;
-		4'd2: nbytes <= (d0[26:16] + 11'd3) >> 2;
-		4'd3: nbytes <= ((d0[26:16] + 11'd7) >> 3) * 11'd3;
-		4'd4: nbytes <= (d0[26:16] + 11'd1) >> 1;
-		default: nbytes <= d0[26:16];
-		endcase
+		// the geometry comes made (kg_scanout.cpp d[6..8]: Ф2)
+		xsh <= d6[2];
+		ysh <= d6[3];
+		nbytes <= d6[26:16];
+		omode <= d6[1:0];
 		cur_p <= 8'hff;
 		st <= S_IDLE;
 	end

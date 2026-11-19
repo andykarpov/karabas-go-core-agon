@@ -81,7 +81,12 @@ int main(int argc, char **argv) {
 	uint64_t done_cyc = 0;
 	int cap_state = 0;               // 1 wait for vsync, 2 wait for the picture, 3 taking it
 	size_t cap_n = 0;
-	std::vector<uint8_t> cap(640 * 480 * 3), shot;
+	// the outputs of vdp_video (Ф2): size and pixel clock; clk_pix from an accumulator on clk (75 MHz)
+	static const int OW[4] = { 640, 640, 800, 1024 }, OH[4] = { 480, 400, 600, 768 };
+	static const uint32_t PIXF[4] = { 25175, 25175, 40000, 65000 };   // kHz
+	uint32_t pix_acc = 0;
+	int cap_mode = 0;
+	std::vector<uint8_t> cap(1024 * 768 * 3), shot;
 	uint32_t shot_w = 0, shot_h = 0;
 	while (!done && cyc < max_cycles) {
 		t->sdr_dq_i = 0xdead;
@@ -115,16 +120,19 @@ int main(int argc, char **argv) {
 			if (getenv("TB_TX")) printf("tx %02x at %.1f ms\n", b, cyc / 75000.0);
 			tx_state = (b == 0x80) ? 1 : (tx_state == 1 && b == 0x01) ? 2 : 0;
 		}
-		t->clk = 1; t->clk_pix = (cyc % 3) == 0; t->eval();
+		t->vid_pmode = t->vid_omode;     // (the clock switch of the board: at once here)
+		pix_acc += PIXF[t->vid_pmode & 3];
+		bool pix = pix_acc >= 75000; if (pix) pix_acc -= 75000;
+		t->clk = 1; t->clk_pix = pix; t->eval();
 		cyc++;
 		// the picture: after the screenshot one whole output frame (de) is taken
 		if (t->clk_pix && cap_state) {
-			if (cap_state == 1 && t->vid_vs) cap_state = 2;              // a vertical sync: the next frame
+			if (cap_state == 1 && t->vid_vs) { cap_state = 2; cap_mode = t->vid_pmode & 3; }   // a vertical sync: the next frame
 			else if (cap_state == 2 && !t->vid_vs && t->vid_de) cap_state = 3;
 			if (cap_state == 3 && t->vid_de) {
 				uint8_t *q = &cap[cap_n * 3];
 				q[0] = t->vid_r * 85; q[1] = t->vid_g * 85; q[2] = t->vid_b * 85;
-				if (++cap_n == 640 * 480) { cap_state = 0; done = true; }
+				if (++cap_n == (size_t)OW[cap_mode] * OH[cap_mode]) { cap_state = 0; done = true; }
 			}
 		}
 		if (t->clk_pix) t->clk_pix = 0, t->eval();
@@ -186,24 +194,25 @@ int main(int argc, char **argv) {
 			printf("the firmware polls the link at %.1f ms\n", cyc / 75000.0); fflush(stdout);
 		}
 	}
-	if (!shot.empty() && cap_n == 640 * 480) {
-		// the screenshot on the 640x480 output as vdp_video must show it: doubled if 320 wide / 240
-		// high, centred if smaller, cropped if bigger
-		std::vector<uint8_t> want(640 * 480 * 3, 0);
-		int xs = shot_w <= 320 ? 2 : 1, ys = shot_h <= 240 ? 2 : 1;
+	const int ow = OW[cap_mode], oh = OH[cap_mode];
+	if (!shot.empty() && cap_n == (size_t)ow * oh) {
+		// the screenshot on the output as vdp_video must show it (the rule of kg_scanout.cpp geometry()):
+		// doubled where it fits twice, centred if smaller, cropped if bigger
+		std::vector<uint8_t> want((size_t)ow * oh * 3, 0);
+		int xs = ow >= 2 * (int)shot_w ? 2 : 1, ys = oh >= 2 * (int)shot_h ? 2 : 1;
 		int dw = shot_w * xs, dh = shot_h * ys;
-		int x0 = dw >= 640 ? 0 : (640 - dw) / 2, y0 = dh >= 480 ? 0 : (480 - dh) / 2;
-		for (int y = 0; y < 480; y++) for (int x = 0; x < 640; x++) {
+		int x0 = dw >= ow ? 0 : (ow - dw) / 2, y0 = dh >= oh ? 0 : (oh - dh) / 2;
+		for (int y = 0; y < oh; y++) for (int x = 0; x < ow; x++) {
 			int sx = (x - x0) / xs, sy = (y - y0) / ys;
 			if (x < x0 || y < y0 || x - x0 >= dw || y - y0 >= dh) continue;
-			memcpy(&want[(y * 640 + x) * 3], &shot[(sy * shot_w + sx) * 3], 3);
+			memcpy(&want[((size_t)y * ow + x) * 3], &shot[(sy * shot_w + sx) * 3], 3);
 		}
 		std::string vp = std::string(ppm) + ".video.ppm";
-		FILE *pf = fopen(vp.c_str(), "wb"); fprintf(pf, "P6\n640 480\n255\n"); fwrite(cap.data(), 1, cap.size(), pf); fclose(pf);
+		FILE *pf = fopen(vp.c_str(), "wb"); fprintf(pf, "P6\n%d %d\n255\n", ow, oh); fwrite(cap.data(), 1, (size_t)ow * oh * 3, pf); fclose(pf);
 		size_t bad = 0;
-		for (size_t i = 0; i < cap.size(); i += 3) if (memcmp(&cap[i], &want[i], 3)) bad++;
-		printf("VIDEO %s: %s (%zu of %d pixels differ from the screenshot)\n", vp.c_str(), bad ? "DIFFERS" : "EQUAL", bad, 640 * 480);
-		if (bad) { std::string wp = std::string(ppm) + ".want.ppm"; FILE *wf = fopen(wp.c_str(), "wb"); fprintf(wf, "P6\n640 480\n255\n"); fwrite(want.data(), 1, want.size(), wf); fclose(wf); }
+		for (size_t i = 0; i < want.size(); i += 3) if (memcmp(&cap[i], &want[i], 3)) bad++;
+		printf("VIDEO %s %dx%d: %s (%zu of %d pixels differ from the screenshot)\n", vp.c_str(), ow, oh, bad ? "DIFFERS" : "EQUAL", bad, ow * oh);
+		if (bad) { std::string wp = std::string(ppm) + ".want.ppm"; FILE *wf = fopen(wp.c_str(), "wb"); fprintf(wf, "P6\n%d %d\n255\n", ow, oh); fwrite(want.data(), 1, want.size(), wf); fclose(wf); }
 	}
 	printf("END cycles %llu (%.1f ms), input %zu/%zu, sdram errors %d%s\n", (unsigned long long)cyc, cyc / 75000.0,
 	       in_pos, in.size(), errors, done ? "" : " (NOT DONE)");

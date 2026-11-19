@@ -67,6 +67,7 @@ module agon_sim_top (
 	assign dbg_v_rx_wr = v_rx_valid;
 	assign dbg_cts = u0_cts;
 
+	wire [1:0] vid_omode_w;                 // (one clk_pix for all the outputs here)
 	agon_ez80 u_ez (.clk(clk_ez), .reset_n(reset_n), .sys_ce(sys_ce), .maddr(maddr), .mrd(mrd), .mwr(mwr),
 		.mdo(mdo), .mem_di(mem_di), .sel_ram(sel_ram), .sel_flash(sel_flash), .flash_ofs(flash_ofs),
 		.sel_ext(sel_ext), .u0_tx_data(u0_tx_data), .u0_tx_valid(u0_tx_valid), .u0_tx_ready(u0_tx_ready),
@@ -87,7 +88,8 @@ module agon_sim_top (
 		.ez_rx_data(v_rx_data), .ez_rx_valid(v_rx_valid), .ez_cts(v_cts),
 		.ez_tx_data(v_tx_data), .ez_tx_valid(v_tx_valid), .ez_tx_ready(v_tx_ready),
 		.clk_pix(clk_pix), .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b), .vid_hs(vid_hs), .vid_vs(vid_vs),
-		.vid_de(vid_de), .vblank(v_vblank),
+		.vid_de(vid_de), .vid_omode(vid_omode_w), .vid_pmode(vid_omode_w), .vid_hneg(), .vid_vneg(),
+		.vblank(v_vblank),
 		.ps2_code(8'd0), .ps2_wr(1'b0),
 		.ms_x(8'd0), .ms_y(8'd0), .ms_z(8'd0), .ms_b(8'd0), .ms_wr(1'b0), .dbg_ez(32'd0),
 		.aud_ce(aud_ce), .aud_out(), .sim_shot_req(sim_shot_req), .sim_req(1'b0),

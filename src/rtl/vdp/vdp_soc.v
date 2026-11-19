@@ -48,7 +48,7 @@ module vdp_soc #(
 	output wire [7:0] ez_tx_data,
 	output wire ez_tx_valid,
 	input wire ez_tx_ready,
-	// the picture (vdp_video: 640x480@60 on clk_pix 25 MHz); vblank (clk) for the eZ80 PB1
+	// the picture (vdp_video: 4 output timings, clk_pix of the one in vid_pmode); vblank (clk) for the eZ80 PB1
 	input wire clk_pix,
 	output wire [1:0] vid_r,
 	output wire [1:0] vid_g,
@@ -56,6 +56,10 @@ module vdp_soc #(
 	output wire vid_hs,
 	output wire vid_vs,
 	output wire vid_de,
+	output wire [1:0] vid_omode,        // the output timing the firmware asks for (clk): the pixel clock to set
+	input wire [1:0] vid_pmode,         // the output timing clk_pix runs now (clk_pix side)
+	output wire vid_hneg,               // sync polarities of vid_pmode (clk_pix)
+	output wire vid_vneg,
 	output wire vblank,
 	// the keyboard: PS/2 set 2 bytes (kg_mcu2 PS2_CODE with PS2_KIND 0)
 	input wire [7:0] ps2_code,
@@ -356,7 +360,8 @@ vdp_video video (
 	.clk(clk), .reset(cpu_reset), .scan_adr(scan_adr),
 	.m_cyc(v_cyc), .m_adr(v_adr), .m_cti(v_cti), .m_ack((own == O_V) & sd_ack), .m_dat(sd_dat),
 	.vblank_sys(vblank),
-	.clk_pix(clk_pix), .r(vid_r), .g(vid_g), .b(vid_b), .hs(vid_hs), .vs(vid_vs), .de(vid_de)
+	.clk_pix(clk_pix), .r(vid_r), .g(vid_g), .b(vid_b), .hs(vid_hs), .vs(vid_vs), .de(vid_de),
+	.omode(vid_omode), .pmode(vid_pmode), .hneg(vid_hneg), .vneg(vid_vneg)
 );
 
 // ------------------------------------------------------------------ CPU bus answers

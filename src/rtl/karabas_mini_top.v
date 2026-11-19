@@ -387,6 +387,9 @@ end
 
 wire [1:0] vid_r, vid_g, vid_b;
 wire vid_hs, vid_vs, vid_de, vdp_run;
+wire [1:0] vid_omode;                       // the output timing the VDP asks for (clk_sys)
+wire [1:0] vid_pmode = 2'd0;                // the timing clk_pix runs (the clock switch: next step)
+wire vid_hneg, vid_vneg;
 wire [7:0] vdp_con, aud_out;
 wire [8:0] vdp_exit;
 wire vdp_con_wr;
@@ -397,7 +400,8 @@ vdp_soc vdp (
 	.ez_rx_data(v_rx_data), .ez_rx_valid(v_rx_valid), .ez_cts(v_cts),
 	.ez_tx_data(v_tx_data), .ez_tx_valid(v_tx_valid), .ez_tx_ready(v_tx_ready),
 	.clk_pix(clk_pix), .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b), .vid_hs(vid_hs), .vid_vs(vid_vs),
-	.vid_de(vid_de), .vblank(v_vblank),
+	.vid_de(vid_de), .vid_omode(vid_omode), .vid_pmode(vid_pmode), .vid_hneg(vid_hneg), .vid_vneg(vid_vneg),
+	.vblank(v_vblank),
 	.ps2_code(ps2_code), .ps2_wr(ps2_wr & ~ps2_kind),
 	.ms_x(ms_x), .ms_y(ms_y), .ms_z(ms_z), .ms_b(ms_b), .ms_wr(ms_wr), .dbg_ez(dbg_ez),
 	.aud_ce(aud_ce), .aud_out(aud_out), .sim_shot_req(1'b0), .sim_req(1'b0), .sim_shot_wr(), .sim_shot(),
