@@ -8,7 +8,7 @@
 # Inputs per board: karabas_<board>.prj (the shared modules as "../modules/rtl/...", rtl/), .xst, .ut, .ucf.
 ISE_SETTINGS ?= /opt/Xilinx/14.7/ISE_DS/settings64.sh
 PART = xc6slx25-ftg256-2
-BOARDS = minig
+BOARDS = go mini minig
 SHELL = /bin/bash
 .SHELLFLAGS = -e -o pipefail -c
 .NOTPARALLEL:
