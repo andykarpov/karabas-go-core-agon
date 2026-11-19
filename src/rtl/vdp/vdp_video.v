@@ -180,17 +180,23 @@ always @(*) begin
 	default: dba = boff + { 1'b0, x[10:2], ~x[1], x[0] };   // fmt 6: the byte of pixel x is at x ^ 2
 	endcase
 end
+// the decode is a pipeline of one pixel a clock (Ф2: 1024 pixels in the ~1550 clocks of a 1024 x 768
+// row): S_DEC reads the raw words of pixel x, the next clock decodes them (xd, dlo: x and dba[1:0] of
+// those words) into the line buffer
 reg [31:0] rw0 = 32'd0, rw1 = 32'd0;   // raw words at dba >> 2 and the next one
+reg [10:0] xd = 11'd0;
+reg [1:0] dlo = 2'd0;
+reg dv = 1'b0;                         // rw0 / rw1 hold pixel xd
 reg [3:0] idx;
 reg [23:0] v24;
 always @(*) begin
 	// the bytes from the two words (for fmt 3 three bytes may cross a word)
-	v24 = { rw1, rw0 } >> { dba[1:0], 3'b000 };
+	v24 = { rw1, rw0 } >> { dlo, 3'b000 };
 	case (fmt)
-	4'd1: idx = { 3'd0, v24[7 - x[2:0]] };
-	4'd2: idx = { 2'd0, v24[7:0] >> (6 - { x[1:0], 1'b0 }) } & 4'd3;
-	4'd3: idx = (v24 >> (21 - x[2:0] * 3)) & 24'd7;
-	4'd4: idx = x[0] ? v24[3:0] : v24[7:4];
+	4'd1: idx = { 3'd0, v24[7 - xd[2:0]] };
+	4'd2: idx = { 2'd0, v24[7:0] >> (6 - { xd[1:0], 1'b0 }) } & 4'd3;
+	4'd3: idx = (v24 >> (21 - xd[2:0] * 3)) & 24'd7;
+	4'd4: idx = xd[0] ? v24[3:0] : v24[7:4];
 	default: idx = 4'd0;
 	endcase
 end
@@ -320,24 +326,28 @@ always @(posedge clk) begin
 				fetch_a <= fetch_a + 25'd32;
 				m_cti <= 3'b010;
 				if (fetch_a + 25'd32 >= fetch_end) begin
-					m_cyc <= 1'b0; x <= 11'd0; s_p <= 11'd0; st <= spr_f ? S_SPW : S_DEC;
+					m_cyc <= 1'b0; x <= 11'd0; s_p <= 11'd0; dv <= 1'b0; st <= spr_f ? S_SPW : S_DEC;
 				end
 			end
 		end
 	S_DEC: begin
-		// read the two raw words of pixel x (registered: S_DEC2 has them)
-		rw0 <= raw[dba >> 2];
-		rw1 <= raw[(dba >> 2) + 12'd1];
-		st <= S_DEC2;
-	end
-	S_DEC2: begin
-		lb_we <= 1'b1;
-		lb_wa <= { line[0], x[9:0] };
-		lb_wd <= fmt == 4'd6 ? v24[5:0] : pal[idx];
-		if (x + 11'd1 >= sw) begin
+		// pixel x: its two raw words (registered); pixel xd of the clock before: decoded
+		dv <= x < sw;
+		if (x < sw) begin
+			rw0 <= raw[dba >> 2];
+			rw1 <= raw[(dba >> 2) + 12'd1];
+			xd <= x; dlo <= dba[1:0];
+			x <= x + 11'd1;
+		end
+		if (dv) begin
+			lb_we <= 1'b1;
+			lb_wa <= { line[0], xd[9:0] };
+			lb_wd <= fmt == 4'd6 ? v24[5:0] : pal[idx];
+		end
+		if (x >= sw && !dv) begin
 			si <= 5'd0; sk <= 3'd0; st_ra <= 7'd0;
 			st <= ns != 6'd0 ? S_SPR : S_IDLE;
-		end else begin x <= x + 11'd1; st <= S_DEC; end
+		end
 	end
 	// ---- the sprites of the line
 	S_SPR: begin
