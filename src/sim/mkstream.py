@@ -147,7 +147,9 @@ def main():
     # --settle: 6000 VDU 0 (nothing) at the end: at the real rate ~50 ms = 3 vblanks, so the frame
     # description of the last vblank is the picture of the screenshot (sprites moved after it otherwise)
     post = bytes(6000) if '--settle' in sys.argv else b''
-    data = gp(0x55) + pre + WORK[name]() + post + gp(0xaa)
+    # mgN: gtext in Agon mode N (Ф2: the output timings of every mode)
+    work = (lambda: gtext(int(name[2:]), b'Agon!')) if name.startswith('mg') and name[2:].isdigit() else WORK[name]
+    data = gp(0x55) + pre + work() + post + gp(0xaa)
     with open(out, 'wb') as f:
         f.write(data)
 

@@ -99,3 +99,5 @@ src/sim/cpu/build/
 src/sim/cpu/build-ez80/
 src/oracle/cemu/build/
 __pycache__/
+src/sim/vdp/out/
+src/sim/vclk/build_vclk

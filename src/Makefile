@@ -17,7 +17,7 @@ KG = agon.kg
 JSON = core.json
 # map / par options (cost table 2 by default, the rule of all the cores)
 MAP_T_go ?= 3     # 2: PAR stuck at 350 ps setup (26111902)
-MAP_T_mini ?= 2
+MAP_T_mini ?= 3     # 2: 94 % slices, PAR stalled in Phase 4 (26111951, area synthesis); 3: 90 %
 MAP_T_minig ?= 2
 MAP = -logic_opt off -ol high -xe n -xt 3 -register_duplication off -r 4 -global_opt off -mt 2 -detail -ir off -pr b -lc auto -power off
 PAR = -ol high -xe c -mt 4
@@ -37,7 +37,7 @@ rom:
 define board
 SRC_$(1) := $$(call prj_src,karabas_$(1).prj)
 
-karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $$(SRC_$(1)) $(INCLUDES)
+karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $(wildcard karabas_$(1).xcf) $$(SRC_$(1)) $(INCLUDES)
 	mkdir -p xst/projnav.tmp
 	$(XIL) xst -intstyle ise -ifn karabas_$(1).xst -ofn karabas_$(1).syr
 

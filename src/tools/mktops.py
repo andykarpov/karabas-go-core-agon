@@ -221,11 +221,11 @@ def mini(s):
     s = common(s)
     s = sub(s, "assign TAPE_OUT = 1'b0;\n", "assign TAPE_OUT = 1'b0;\nassign FT_RESET = 1'b1;\n", "FT_RESET")
     s = sub(s, "assign MCU_IO[5:2] = 4'bzzzz;\n", "assign MCU_IO[3:2] = 2'bzz;\n", "MCU_IO")
-    a = s.index("kg_pcm5102 #(.DIV_BITS(2)) dac (")
+    a = s.index("kg_pcm5102 #(.DIV_BITS(3)) dac (")
     b = s.index(PCM_OUT, a) + len(PCM_OUT)
     s = s[:a] + ("// no I2S DAC on this board: sigma-delta outputs into an RC filter (offset binary)\n"
-                 "kg_sigma_delta_dac dac_l (.clk(clk_pix), .reset(areset_pix), .din(snd ^ 16'h8000), .dout(AUDIO_L));\n"
-                 "kg_sigma_delta_dac dac_r (.clk(clk_pix), .reset(areset_pix), .din(snd ^ 16'h8000), .dout(AUDIO_R));\n") + s[b:]
+                 "kg_sigma_delta_dac dac_l (.clk(clk_sys), .reset(areset), .din(snd_sys ^ 16'h8000), .dout(AUDIO_L));\n"
+                 "kg_sigma_delta_dac dac_r (.clk(clk_sys), .reset(areset), .din(snd_sys ^ 16'h8000), .dout(AUDIO_R));\n") + s[b:]
     return s
 
 
@@ -260,16 +260,17 @@ def go(s):
             "// the flash chip (the SDRAM /CS is hard wired on Go): not selected\n"
             "assign FLASH_CS_N = 1'b1;\n", "FLASH_CS_N")
     s = sub(s, "assign ADC_CLK = 1'b0;\nassign ADC_BCK = 1'bz;\nassign ADC_LRCK = 1'bz;\n", "", "ADC")
-    s = cut(s, "reg [11:0] hacc = 12'd0;", "// ------------------------------------------------------------------ debug",
+    s = sub(s, "agon_vclk #(.HDMI(1)) vclk", "agon_vclk #(.HDMI(0)) vclk", "vclk go")
+    s = cut(s, "// ------------------------------------------------------------------ HDMI\n", "// ------------------------------------------------------------------ debug",
             """// ------------------------------------------------------------------ VGA
 
-// 640 x 480 at 60 Hz: negative syncs as on HDMI, black outside de (the DAC has no blank input); the
-// OSD output is registered with them
+// the timing of the video mode (agon_vclk, vdp_video): the VESA sync polarities, black outside de (the DAC
+// has no blank input); the OSD output is registered with them
 reg vga_hs = 1'b1, vga_vs = 1'b1;
 reg [23:0] vga_rgb = 24'd0;
 always @(posedge clk_pix) begin
-	vga_hs <= ~osd_hs;
-	vga_vs <= ~osd_vs;
+	vga_hs <= osd_hs ^ vid_hneg;
+	vga_vs <= osd_vs ^ vid_vneg;
 	vga_rgb <= osd_de ? osd_rgb : 24'd0;
 end
 assign VGA_R = vga_rgb[23:16];
@@ -294,8 +295,12 @@ def ucf(board):
     if board == "mini":
         timing = sub(timing, "# The PERIOD of CLK_50MHZ is derived", "# MCU_SCK is not on a clock pin before rev.G.\n# The PERIOD of CLK_50MHZ is derived", "ucf mini")
     if board == "go":
-        timing = sub(timing, "#   pll_clk<3> / <4> 125 MHz (/6, 0 / 180 degrees) -> clk_hdmi / clk_hdmi_n: the TMDS serialiser\n",
-                     "#   pll_clk<3> / <4>: not used on Go (no HDMI)\n", "ucf go hdmi")
+        timing = sub(timing, "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, HDMI; a DCM x5 on it -> clk_hdmi / clk_hdmi_n (200 MHz)\n",
+                     "#   clk_pix (the BUFGMUX output): vdp_video, the OSD, the VGA DAC (V_CLK); no HDMI on Go\n", "ucf go hdmi")
+        timing = sub(timing, '# the reset of hdmi_tx (sync_areset_pix, held for many pixel clocks while the DCM x5 locks) into the TMDS\n# serialisers on the x5 clock: one serial clock (5 ns at 40 MHz) is not needed for it\nINST "sync_areset_pix/s_1" TNM = "TG_PIX_RST";\nINST "hdmi/chn[*].serial/shift_r*" TNM = "TG_TMDS_SER";\nTIMESPEC "TS_PIX_RST" = FROM "TG_PIX_RST" TO "TG_TMDS_SER" TIG;\n',
+                     "# (no HDMI on Go)\n", "ucf go tmds")
+        timing = sub(timing, '# the HDMI transmitter (signaler, island encoder, TMDS encoders, serialisers) in one area next to the TMDS\n# pins (top edge, the serialiser range of core-cpc / core-bbc): at 97 % slices its 65 MHz paths spread over\n# the die and missed by routing (13 of 15 ns route)\nINST "hdmi/*" AREA_GROUP = "AG_HDMI";\nAREA_GROUP "AG_HDMI" RANGE = SLICE_X26Y52:SLICE_X49Y77;\n',
+                     "", "ucf go hdmi area")
         timing = sub(timing, "agon_sram), FT_CLK_OUT / 4\n", "agon_sram)\n# V_CLK = clk_pix (an ODDR2). MCU_SCK not on a clock pin.\n", "ucf go clk_ez")
     path = os.path.join(SRC, "karabas_%s.ucf" % board)
     pins = open(path).read()

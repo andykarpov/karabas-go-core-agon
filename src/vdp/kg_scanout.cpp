@@ -10,6 +10,12 @@
 //   d[2] = the row table: height words, the address of each row (vdp-gl m_viewPortVisible)
 //   d[3] = height bytes: the palette of each row (an index into d[4])
 //   d[4] = the palettes: 16 bytes each, RGB222 (bits 1..0 R, 3..2 G, 5..4 B) per colour index
+//   d[5] = the sprite list (below)
+//   d[6] = output | xdouble << 2 | ydouble << 3 | bytes of a source line << 16
+//          output (Ф2, the timing of the board video): 0 640x480@60, 1 640x400@70, 2 800x600@60,
+//          3 1024x768@60
+//   d[7] = x0 | y0 << 16: the top left of the picture on the output
+//   d[8] = vw | vh << 16: the visible size of the picture on the output (cropped to it)
 // Pixel packing in a row: PALETTE2 1 bit, the leftmost pixel in bit 7; PALETTE4 2 bits, leftmost in
 // bits 7..6; PALETTE8 3 bits, 8 pixels in 3 bytes read as a little-endian 24-bit word, the leftmost in
 // bits 23..21; PALETTE16 4 bits, the leftmost in the high nibble.
@@ -32,7 +38,7 @@ bool kg_dbg_on = KG_DBG_DEFAULT;
 namespace {
 const int MAXH = 1024, MAXPAL = 64, MAXSPR = 32;
 struct Desc {
-	uint32_t d[6];
+	uint32_t d[9];
 	uint8_t rowpal[MAXH];
 	uint8_t pal[MAXPAL][16];
 	uint32_t spr[1 + 4 * MAXSPR];
@@ -115,6 +121,25 @@ void add_sprite(uint32_t *l, fabgl::Sprite *s, int vw, int vh) {
 }
 }
 
+// the output timing for a vdp-gl mode and the place of the w x h picture on it (Ф2, user 2026-11-19):
+// 640x480@60 (640x480, 640x240, 320x240), 640x400@70 (320x200@70 / @75), 800x600@60 (800x600 and all the
+// bigger modes: 1024x768 cropped, 512x384 / 640x512 / 640x256 centred). 1024x768@60 (65 MHz) dropped
+// (user 2026-11-19): with it Mini G (97 % slices) did not route.
+const int OUT_W[4] = { 640, 640, 800, 1024 }, OUT_H[4] = { 480, 400, 600, 768 };
+void geometry(uint32_t *d, const fabgl::VGATimings &t, int fmt, int w, int h) {
+	int lines = t.VVisibleArea * (t.scanCount ? t.scanCount : 1);   // the lines of the real VGA signal
+	int out = t.HVisibleArea > 640 || lines > 480 || t.frequency >= 50000000 ? 2 : lines == 400 ? 1 : 0;
+	int ow = OUT_W[out], oh = OUT_H[out];
+	int xs = ow >= 2 * w ? 1 : 0, ys = oh >= 2 * h ? 1 : 0;
+	int dw = w << xs, dh = h << ys;
+	int vw = dw < ow ? dw : ow, vh = dh < oh ? dh : oh;
+	int x0 = dw < ow ? (ow - dw) / 2 : 0, y0 = dh < oh ? (oh - dh) / 2 : 0;
+	int nb = fmt == 1 ? (w + 7) >> 3 : fmt == 2 ? (w + 3) >> 2 : fmt == 3 ? ((w + 7) >> 3) * 3 : fmt == 4 ? (w + 1) >> 1 : w;
+	d[6] = (uint32_t)out | (uint32_t)xs << 2 | (uint32_t)ys << 3 | (uint32_t)nb << 16;
+	d[7] = (uint32_t)x0 | (uint32_t)y0 << 16;
+	d[8] = (uint32_t)vw | (uint32_t)vh << 16;
+}
+
 void kg_scanout_publish() {
 	auto *vga = fabgl::VGABaseController::activeController;
 	Desc &o = desc[cur ^ 1];
@@ -146,6 +171,7 @@ void kg_scanout_publish() {
 			}
 			for (; y < h; y++) o.rowpal[y] = (uint8_t)(n ? n - 1 : 0);
 		}
+		if (o.d[0]) geometry(o.d, vga->m_timings, fmt, w, h);
 		if (o.d[0]) {
 			auto *pc = static_cast<fabgl::VGAPalettedController *>(vga);
 			auto *t = pc->textCursor();

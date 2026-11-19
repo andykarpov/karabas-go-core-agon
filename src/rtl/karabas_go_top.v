@@ -11,9 +11,10 @@
  core on T80 + the F92 periphery, MOS from the .kg) and the VDP machine (vdp_soc: VexRiscv + the
  Console8 VDP firmware from the .kg + the scanout), joined by agon_link (docs/PLAN.md Ф1).
 
- Clocks: one PLL, VCO 750 MHz (50 * 15): clk_sys 75 MHz (the VDP, the MCU link), clk_sdr 75 MHz at
- 225 degrees (SDR_CLK through an ODDR2), clk_pix 25 MHz (640 x 480 at 60 Hz, the OSD, HDMI),
- clk_hdmi / clk_hdmi_n 125 MHz, clk_ez 34.09 MHz (the eZ80; 37.5 left no timing margin: user 2026-11-19; the F92 system clock 18.432 MHz as a
+ Clocks: one PLL, VCO 750 MHz (50 * 15): clk_sys 75 MHz (the VDP, the MCU link, the sound), clk_sdr 75 MHz at
+ 225 degrees (SDR_CLK through an ODDR2), clk_pix of the video mode (agon_vclk, Ф2: 25 MHz of the PLL for
+ 640x480@60 / 640x400@70, DCM_CLKGEN 40 MHz for 800x600@60; the OSD, HDMI) with
+ clk_hdmi / clk_hdmi_n x5 from a DCM, clk_ez 34.09 MHz (the eZ80; 37.5 left no timing margin: user 2026-11-19; the F92 system clock 18.432 MHz as a
  clock enable from it); FT_CLK_OUT = clk_ez / 4 (8.5 MHz).
  Memory: the eZ80 in the SRAM (agon_sram: MOS, 512 KB, the on-chip 8 KB), the VDP in the SDRAM.
  The .kg ROMs: MOS at 0 (-> the SRAM flash area), the VDP firmware at 0x1000000 (-> SDRAM 0).
@@ -168,11 +169,12 @@ kg_pll #(
 	.CLKOUT0_DIVIDE(10),     // clk_sys 75 MHz
 	.CLKOUT1_DIVIDE(10),     // clk_sdr 75 MHz, 225 degrees
 	.CLKOUT1_PHASE(225.0),
-	.CLKOUT2_DIVIDE(30),     // clk_pix 25 MHz
-	.CLKOUT3_DIVIDE(6),      // clk_hdmi 125 MHz
-	.CLKOUT4_DIVIDE(6),      // clk_hdmi_n 125 MHz, 180 degrees
+	.CLKOUT2_DIVIDE(30),     // 25 MHz (no BUFG: the BUFGMUX of agon_vclk) -> clk_pix of the 25 MHz modes
+	.CLKOUT3_DIVIDE(6),      // (not used since Ф2: the serial clocks come from agon_vclk)
+	.CLKOUT4_DIVIDE(6),
 	.CLKOUT4_PHASE(180.0),
-	.CLKOUT5_DIVIDE(22)      // clk_ez 34.09 MHz
+	.CLKOUT5_DIVIDE(22),     // clk_ez 34.09 MHz
+	.BUFG_MASK(6'b100011)
 ) pll (
 	.clk_in(CLK_50MHZ),
 	.rst(1'b0),
@@ -181,15 +183,19 @@ kg_pll #(
 );
 wire clk_sys = pll_clk[0];
 wire clk_sdr = pll_clk[1];
-wire clk_pix = pll_clk[2];
-wire clk_hdmi = pll_clk[3];
-wire clk_hdmi_n = pll_clk[4];
 wire clk_ez = pll_clk[5];
+// the pixel clock of the output timing the VDP asks for (Ф2): 25 / 40 MHz (agon_vclk)
+wire clk_pix, clk_hdmi, clk_hdmi_n, vclk_locked;
+wire [1:0] vid_omode, vid_pmode_sys, vid_pmode;
+agon_vclk #(.HDMI(0)) vclk (.clk_sys(clk_sys), .reset(~pll_locked), .clk_25(pll_clk[2]), .omode(vid_omode),
+	.pmode(vid_pmode_sys), .clk_pix(clk_pix), .clk_hdmi(clk_hdmi), .clk_hdmi_n(clk_hdmi_n), .locked(vclk_locked));
+kg_sync #(.W(2), .STAGES(2)) sync_pmode (.clk(clk_pix), .d(vid_pmode_sys), .q(vid_pmode));
 
 (* KEEP = "TRUE" *) wire areset_async = ~pll_locked;
 wire areset, areset_pix, areset_ez;
 kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_areset (.clk(clk_sys), .d(areset_async), .q(areset));
-kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_areset_pix (.clk(clk_pix), .d(areset_async), .q(areset_pix));
+(* KEEP = "TRUE" *) wire areset_pix_async = ~pll_locked | ~vclk_locked;
+kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_areset_pix (.clk(clk_pix), .d(areset_pix_async), .q(areset_pix));
 kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_areset_ez (.clk(clk_ez), .d(areset_async), .q(areset_ez));
 
 // FT_CLK_OUT: clk_ez / 4 (the FT812 needs a clock on Mini G, always)
@@ -402,6 +408,7 @@ end
 
 wire [1:0] vid_r, vid_g, vid_b;
 wire vid_hs, vid_vs, vid_de, vdp_run;
+wire vid_hneg, vid_vneg;                    // the sync polarities of vid_pmode (clk_pix)
 wire [7:0] vdp_con, aud_out;
 wire [8:0] vdp_exit;
 wire vdp_con_wr;
@@ -412,7 +419,8 @@ vdp_soc vdp (
 	.ez_rx_data(v_rx_data), .ez_rx_valid(v_rx_valid), .ez_cts(v_cts),
 	.ez_tx_data(v_tx_data), .ez_tx_valid(v_tx_valid), .ez_tx_ready(v_tx_ready),
 	.clk_pix(clk_pix), .vid_r(vid_r), .vid_g(vid_g), .vid_b(vid_b), .vid_hs(vid_hs), .vid_vs(vid_vs),
-	.vid_de(vid_de), .vblank(v_vblank),
+	.vid_de(vid_de), .vid_omode(vid_omode), .vid_pmode(vid_pmode), .vid_hneg(vid_hneg), .vid_vneg(vid_vneg),
+	.vblank(v_vblank),
 	.ps2_code(ps2_code), .ps2_wr(ps2_wr & ~ps2_kind),
 	.ms_x(ms_x), .ms_y(ms_y), .ms_z(ms_z), .ms_b(ms_b), .ms_wr(ms_wr), .dbg_ez(dbg_ez),
 	.aud_ce(aud_ce), .aud_out(aud_out), .sim_shot_req(1'b0), .sim_req(1'b0), .sim_shot_wr(), .sim_shot(),
@@ -439,31 +447,23 @@ kg_l2_osd_overlay osd (
 );
 
 // the sound: the VDP samples (8-bit unsigned, 16384 Hz, vdp-gl SoundGenerator) to the PCM5102 and the
-// HDMI audio (mono on both channels). aud_out changes at the aud_ce clock (clk_sys) and holds ~4500
-// clocks: a toggle per sample crosses to clk_pix, the sample is taken when it arrives.
-reg aud_tg = 1'b0;
-always @(posedge clk_sys) if (aud_ce) aud_tg <= ~aud_tg;
-reg [2:0] aud_tg_p = 3'd0;
-reg [15:0] snd = 16'd0;
-always @(posedge clk_pix) begin
-	aud_tg_p <= { aud_tg_p[1:0], aud_tg };
-	if (aud_tg_p[2] ^ aud_tg_p[1]) snd <= { ~aud_out[7], aud_out[6:0], 8'h00 };
-end
-// the level meters of the mcu (dot matrix): the peaks of the samples (clk_sys, as kg_mcu2)
+// HDMI audio (mono on both channels), in clk_sys (Ф2: clk_pix follows the video mode)
 wire [15:0] snd_sys = { ~aud_out[7], aud_out[6:0], 8'h00 };
+// the level meters of the mcu (dot matrix): the peaks of the samples (clk_sys, as kg_mcu2)
 audio_peaks #(.PERIOD_BITS(20)) peaks (.clk(clk_sys), .audio_l(snd_sys), .audio_r(snd_sys),
 	.cmd_wr(matrix_cmd_wr), .cmd(matrix_cmd));
-kg_pcm5102 #(.DIV_BITS(2)) dac (.clk(clk_pix), .reset(areset_pix), .left(snd), .right(snd),
+kg_pcm5102 #(.DIV_BITS(3)) dac (.clk(clk_sys), .reset(areset), .left(snd_sys), .right(snd_sys),
 	.din(DAC_DAT), .bck(DAC_BCK), .lrck(DAC_LRCK));
+
 // ------------------------------------------------------------------ VGA
 
-// 640 x 480 at 60 Hz: negative syncs as on HDMI, black outside de (the DAC has no blank input); the
-// OSD output is registered with them
+// the timing of the video mode (agon_vclk, vdp_video): the VESA sync polarities, black outside de (the DAC
+// has no blank input); the OSD output is registered with them
 reg vga_hs = 1'b1, vga_vs = 1'b1;
 reg [23:0] vga_rgb = 24'd0;
 always @(posedge clk_pix) begin
-	vga_hs <= ~osd_hs;
-	vga_vs <= ~osd_vs;
+	vga_hs <= osd_hs ^ vid_hneg;
+	vga_vs <= osd_vs ^ vid_vneg;
 	vga_rgb <= osd_de ? osd_rgb : 24'd0;
 end
 assign VGA_R = vga_rgb[23:16];
