@@ -201,8 +201,8 @@ kg_sync #(.W(1), .STAGES(2), .INIT(1'b1)) sync_areset_ez (.clk(clk_ez), .d(arese
 // FT_CLK_OUT: clk_ez / 4 (the FT812 needs a clock on Mini G, always)
 reg [1:0] ft_div = 2'd0;
 always @(posedge clk_ez) ft_div <= ft_div + 2'd1;
-// the pixel clock of the VGA DAC (no FT_CLK_OUT on Go: the FT812 has its crystal)
-ODDR2 oddr_v_clk (.Q(V_CLK), .C0(clk_pix), .C1(~clk_pix), .CE(1'b1), .D0(1'b1), .D1(1'b0), .R(1'b0), .S(1'b0));
+// the pixel clock of the VGA DAC, inverted: the DAC takes the pixel on the rising V_CLK, the middle of the pixel
+ODDR2 oddr_v_clk (.Q(V_CLK), .C0(clk_pix), .C1(~clk_pix), .CE(1'b1), .D0(1'b0), .D1(1'b1), .R(1'b0), .S(1'b0));
 ODDR2 oddr_sdr_clk (.Q(SDR_CLK), .C0(clk_sdr), .C1(~clk_sdr), .CE(1'b1), .D0(1'b1), .D1(1'b0), .R(1'b0), .S(1'b0));
 
 // ------------------------------------------------------------------ MCU
